@@ -36,6 +36,14 @@ bash setup.sh
 2. Download the necessary data files and pretrained retrieval models
 Simplified data files with **quesitons** and ground-truth **supporting passages**:
 
+** (UMass) If using the Unity cluster, create a symbolic link to the downloaded files instead of redownloading:
+```bash
+ln -s /gypsum/scratch1/dagarwal/multihop_dense_retrieval/data ./data
+ln -s /gypsum/scratch1/dagarwal/multihop_dense_retrieval/models ./models
+```
+
+To redownload:
+
 ```
 # save pretrained models to models/ and all processed hotpotQA into data/ 
 # models will take about 2GB, and data will take 20GB since the pre-trained wikipedia index are included.
