@@ -11,7 +11,7 @@ with open('requirements.txt', encoding='utf8') as f:
     reqs = f.read()
 
 setup(
-    name='densephrases',
+    name='ap',
     version='1.0',
     description='Learning Dense Representations of Phrases at Scale',
     long_description=readme,
