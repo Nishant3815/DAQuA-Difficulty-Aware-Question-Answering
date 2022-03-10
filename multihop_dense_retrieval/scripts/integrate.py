@@ -5,15 +5,23 @@ from densephrases import DensePhrases
 
 
 # Arguments: Presently hard-coded, Add argparse later on
-top_k = 2
-n_sel = 2
+top_k = 6
+n_sel = 4
 load_dir = 'princeton-nlp/densephrases-multi-query-multi'
 dump_dir = '/home/nishantraj_umass_edu/DAQuA-Difficulty-Aware-Question-Answering/DPhrases/outputs/densephrases-multi_wiki-20181220/dump'
 idx_name = 'start/1048576_flat_OPQ96_small'
 device = 'cpu'
-ret_meta = True
-ret_unit='phrase'
+ret_meta = True # Other case not handled for at present
+ret_unit1='sentence'
+ret_unit2='phrase'
 out_file = 'data.json'
+strip_ques1 = True    #Flags for updating the question on first hop
+strip_prompt1 = True  #Flags for updating the question on second hop
+strip_ques2 = False
+strip_prompt2 = False
+# Question terms to be stripped of in the first hop update if strip_prompt1 flag is set to True
+ques_terms = ['What','what','which','Which','Who','who','When','Where','when', 'where','How','how', 'Whom', 'whom']
+method = 'post'
 
 # Query List to be updated based on a function to read json validation files and get list of queries after reading
 query_list = ["What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",\
@@ -26,6 +34,27 @@ def load_densephrase_module(load_dir= load_dir, dump_dir= dump_dir, index_name= 
     """
     model = DensePhrases(load_dir= load_dir, dump_dir= dump_dir, index_name= idx_name, device=device)
     return model 
+
+def update_query_list(query_list, strip_ques = False, strip_prompt = False, **kwargs):
+    """
+    Update the query at first hop with the flexibility to choose if we want to keep 
+    question marks as well as to decide if we want to keep question prompts like 
+    "what", "when" etc.
+    """
+    # Update the query if stripping of the question mark is required 
+    if strip_ques:
+        upd_query_list = []
+        for ques in query_list:
+            if not strip_prompt:
+                upd_query_list.append(ques.replace("?", ""))
+            else:
+                strip_prlist = list(kwargs.values())[0]
+                int_ques = ques.replace("?", "")
+                upd_query_list.append(" ".join([token for token in int_ques.split() if token not in strip_prlist]))
+    else:
+        upd_query_list = query_list
+    return upd_query_list
+
 
 def get_first_hop_phrase_score_list(metadata, top_k):
     """
@@ -40,7 +69,7 @@ def get_first_hop_phrase_score_list(metadata, top_k):
         phrase_score_list.append(interim_scores)
     return phrase_score_list
 
-def create_new_query(query_list, top_k, phrases):
+def create_new_query_legacy(query_list, top_k, phrases):
     """
     Add query to the first hop retrievals and treat them as queries for second hop retrievals
     """
@@ -56,6 +85,26 @@ def create_new_query(query_list, top_k, phrases):
 
     return flat_second_hop_qlist
 
+def create_new_query_update(upd_query_list, top_k, retunit, method='post'):
+    """
+    Add query to the first hop retrievals and treat them as queries for second hop retrievals
+    method: 'pre' or 'post' to decide if the retrieval unit term is to be prepended or post appended
+    """
+    all_query_pairs = []
+    # Update the query if stripping of the question mark is required
+    for query_num in tqdm(range(len(upd_query_list))):
+        interim_comb = []
+        for sub_retunit_num in range(top_k):
+            if method=='post':
+                interim_comb.append(upd_query_list[query_num]+ " " + retunit[query_num][sub_retunit_num])
+            elif method=='pre':
+                interim_comb.append(retunit[query_num][sub_retunit_num] + " "+ upd_query_list[query_num])
+        all_query_pairs.append(interim_comb)
+    
+    # Returns a flattened query list for second hop retrieval
+    flat_second_hop_qlist = [query for blist in all_query_pairs for query in blist]
+
+    return flat_second_hop_qlist
 
 def get_second_hop_retrieval(hop_phrases, hop_metadata, n_ins, top_k):
     """
@@ -118,26 +167,31 @@ if __name__ == "__main__":
     # Total Number of Queries
     n_ins = len(query_list)
 
+    # Update the query list based on user input 
+    upd_query_list = update_query_list(query_list, strip_ques1, strip_prompt1, ques_terms=ques_terms)
+
     # Run the model to retrieve the first hop of phrases and their corresponding scores
     print("Running DensePhrases module for first hop phrase retrieval ...")
-    phrases, metadata = model.search(query_list, retrieval_unit=ret_unit, top_k=top_k, return_meta= ret_meta)
+    retunit, metadata = model.search(upd_query_list, retrieval_unit=ret_unit1, top_k=top_k, return_meta= ret_meta)
 
     # Get phrase scores separately from metadata for first hop
-    phrase_sc_1 = get_first_hop_phrase_score_list(metadata, top_k)
+    retunit_sc_1 = get_first_hop_phrase_score_list(metadata, top_k)
 
     # Get new query combinations for second hop retrieval from DensePhrases module
-    flat_second_hop_qlist  = create_new_query(query_list, top_k, phrases)
+    flat_second_hop_qlist  = create_new_query_update(query_list, top_k, retunit, method=method)
 
     # Run second hop retrieval from DensePhrases module
     print("Running second hop of phrase retrieval")
-    hop_phrases, hop_metadata = model.search(flat_second_hop_qlist, retrieval_unit= ret_unit, top_k=top_k, return_meta= ret_meta)
+    # Update second round question list if required 
+    upd_flat_second_hop_qlist = update_query_list(flat_second_hop_qlist, strip_ques2, strip_prompt2, ques_terms=ques_terms)
+    hop_retunit, hop_metadata = model.search(upd_flat_second_hop_qlist, retrieval_unit= ret_unit2, top_k=top_k, return_meta= ret_meta)
 
     # Get score and phrase list from second retrieval for evidence chain extraction
-    phrase_sc_2, phrase_arr_2 = get_second_hop_retrieval(hop_phrases, hop_metadata, n_ins, top_k)
+    retunit_sc_2, retunit_arr_2 = get_second_hop_retrieval(hop_retunit, hop_metadata, n_ins, top_k)
     
     print("Creating final dictionary")
     # Get final chain of best n_sel queries for each question
-    qchain_dict = run_chain_all_queries(query_list, phrase_sc_1, phrase_sc_2, phrases, phrase_arr_2, top_k, n_sel)
+    qchain_dict = run_chain_all_queries(query_list, retunit_sc_1, retunit_sc_2, retunit, retunit_arr_2, top_k, n_sel)
 
     # Dump information inside a JSON file
     with open(out_file, 'w') as fp:
