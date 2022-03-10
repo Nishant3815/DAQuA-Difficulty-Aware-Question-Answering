@@ -16,7 +16,7 @@ idx_name = 'start/1048576_flat_OPQ96_small'
 data_path = "/gypsum/scratch1/dagarwal/multihop_dense_retrieval/data/hotpot/hotpot_qas_val.json"
 device = 'cuda'  # 'cpu'
 ret_unit='phrase'
-out_file = f'predictions_{__import__('calendar').timegm(gmt)}.json'
+out_file = f'predictions_{__import__("calendar").timegm(gmt)}.json'
 # Questions to be updated based on a function to read json validation files and get list of queries after reading
 questions = ["What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",\
 "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?"]
@@ -217,5 +217,3 @@ if __name__ == "__main__":
     with open(out_file, 'w') as fp:
         json.dump(results, fp, indent=4)
     print(f"Predictions saved at {out_file}")
-
-    print("\nRun Complete")
