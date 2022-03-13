@@ -1,2 +1,14 @@
 /Datasets
+DPhrases/ap.egg-info/
+DPhrases/densephrases-data
+DPhrases/densephrases/__pycache__/
+DPhrases/densephrases/utils/__pycache__/
+DPhrases/outputs
+multihop_dense_retrieval/ap.egg-info/
+multihop_dense_retrieval/data
+multihop_dense_retrieval/mdr/retrieval/data
+multihop_dense_retrieval/mdr/retrieval/models
+multihop_dense_retrieval/models
+multihop_dense_retrieval/scripts/data.json
+multihop_dense_retrieval/scripts/densephrases
 

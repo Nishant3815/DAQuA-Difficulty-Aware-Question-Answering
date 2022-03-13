@@ -19,12 +19,12 @@ with open('requirements.txt') as f:
     reqs = f.read()
 
 setup(
-    name='mdr',
+    name='ap',
     version='0.0.1',
     description='Multi-hop dense retrieval for complex open-domain question answering',
     long_description='text/markdown',
     # license=license,
     python_requires='>=3.6',
-    packages=find_packages(exclude=('data')),
-    install_requires=reqs.strip().split('\n'),
+    #packages=find_packages(exclude=('data')),
+   # install_requires=reqs.strip().split('\n'),
 )
