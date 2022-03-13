@@ -1,17 +1,19 @@
 from IPython import embed
 import json
 
-
 # Arguments: Presently hard-coded; TODO: Add argparse later on
 PREDICTIONS_PATH = "./data.json"
+
 
 def read_results(path):
     with open(path, 'r') as jsonfile:
         results = json.load(jsonfile)
     return results
 
+
 def lower_list(l):
     return list(map(str.lower, l))
+
 
 def metric_em(gold, preds):
     """
@@ -20,6 +22,7 @@ def metric_em(gold, preds):
     if gold in preds:
         return 1
     return 0
+
 
 def metric_substr_gp(gold, preds):
     """
@@ -30,6 +33,7 @@ def metric_substr_gp(gold, preds):
             return 1
     return 0
 
+
 def metric_substr_pg(gold, preds):
     """
     Hit when any of the predictions is a substring of the gold answer
@@ -38,6 +42,7 @@ def metric_substr_pg(gold, preds):
         if p in gold:
             return 1
     return 0
+
 
 def metric_substr_2way(gold, preds):
     """
@@ -48,6 +53,7 @@ def metric_substr_2way(gold, preds):
             return 1
     return 0
 
+
 def overlap_coeff(gold, preds):
     """
     Overlap (Szymkiewicz-Simpson) coefficient
@@ -57,24 +63,29 @@ def overlap_coeff(gold, preds):
     gold_tokens = set(gold.split())
     for p in preds:
         p_tokens = set(p.split())
-        val = len(gold_tokens.intersection(p_tokens)) / min(len(gold_tokens), len(p_tokens))
+        try:
+            val = len(gold_tokens.intersection(p_tokens)) / min(len(gold_tokens), len(p_tokens))
+        except:
+            val = 0
         best = max(best, val)
     return best
+
 
 def write_eval_results(path, obj):
     with open(path, 'w') as fp:
         json.dump(obj, fp, indent=4)
-        
+
+
 def compute_metrics(results):
     """
     Run each evaluation metric on the predictions and aggregate results
     """
     total = len(results)
     metrics = {
-        "em": metric_em, 
-        "substr_gp": metric_substr_gp, 
-        "substr_pg": metric_substr_pg, 
-        "substr2": metric_substr_2way, 
+        "em": metric_em,
+        "substr_gp": metric_substr_gp,
+        "substr_pg": metric_substr_pg,
+        "substr2": metric_substr_2way,
         "overlap": overlap_coeff
     }
     eval_dict = {
@@ -92,7 +103,7 @@ def compute_metrics(results):
             eval_dict[m] += metrics[m](gold, preds)
     # Normalize
     for m in metrics:
-        eval_dict[m] = round(eval_dict[m]/total * 100, 2)
+        eval_dict[m] = round(eval_dict[m] / total * 100, 2)
 
     print(json.dumps(eval_dict, indent=2))
     return eval_dict
