@@ -102,8 +102,12 @@ def compute_metrics(results):
         for m in metrics:
             eval_dict[m] += metrics[m](gold, preds)
     # Normalize
+    overall = 0.
     for m in metrics:
         eval_dict[m] = round(eval_dict[m] / total * 100, 2)
+        overall += eval_dict[m]
+    overall /= len(metrics)
+    eval_dict['overall_avg'] = overall
 
     print(json.dumps(eval_dict, indent=2))
     return eval_dict
