@@ -15,8 +15,10 @@ idx_name = 'start/1048576_flat_OPQ96_small'
 data_path = "/gypsum/scratch1/dagarwal/multihop_dense_retrieval/data/hotpot/hotpot_qas_val.json"
 device = 'cuda'  # 'cpu'
 ret_meta = True  # Other case not handled for at present
+# Retrieval units for 1st and second hops
 ret_unit1 = 'phrase'
 ret_unit2 = 'phrase'
+# file name for JSON dump of 1st or second hop predictions
 out_file = f'predictions_{__import__("calendar").timegm(__import__("time").gmtime())}.json'
 strip_ques1 = False  # Flags for updating the question on first hop
 strip_prompt1 = True  # Flags for updating the question on second hop
@@ -27,7 +29,8 @@ strip_prompt_mode = "first"
 ques_terms = ['What', 'what', 'which', 'Which', 'Who', 'who', 'When', 'Where', 'when', 'where', 'How', 'how', 'Whom',
               'whom']
 method = 'post'
-single_hop = False
+# Flag to do only First hop retrieval if True or second hop if False 
+single_hop = True
 
 # Query List to be updated based on a function to read json validation files and get list of queries after reading
 query_list = ["What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?", \
