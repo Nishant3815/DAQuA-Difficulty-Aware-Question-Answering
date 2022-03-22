@@ -80,104 +80,108 @@ def train_query_encoder(args, mips=None):
     # Train arguments
     args.per_gpu_train_batch_size = int(args.per_gpu_train_batch_size / args.gradient_accumulation_steps)
     best_acc = -1000.0
-    for ep_idx in range(int(args.num_train_epochs)):
 
-        # Training
-        total_loss = 0.0
-        total_accs = []
-        total_accs_k = []
+    if args.num_firsthop_epochs > 0:
+        # Warm-up the model with a first-hop retrieval objective
+        for ep_idx in range(int(args.num_firsthop_epochs)):
+            # Training
+            total_loss = 0.0
+            total_accs = []
+            total_accs_k = []
 
-        # Load training dataset
-        q_ids, questions, answers, titles = load_qa_pairs(args.train_path, args, shuffle=True)
-        pbar = tqdm(get_top_phrases(
-            mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,
-            args.per_gpu_train_batch_size, args)
-        )
-
-        for step_idx, (q_ids, questions, answers, titles, outs) in enumerate(pbar):
-            train_dataloader, _, _ = get_question_dataloader(
-                questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
+            # Load training dataset
+            q_ids, questions, answers, titles = load_qa_pairs(args.train_path, args, shuffle=True)
+            pbar = tqdm(get_top_phrases(
+                mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,
+                args.per_gpu_train_batch_size, args)
             )
-            svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args)
 
-            target_encoder.train()
-            svs_t = torch.Tensor(svs).to(device)
-            evs_t = torch.Tensor(evs).to(device)
-            tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
-            p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
-
-            # Train query encoder
-            assert len(train_dataloader) == 1
-            for batch in train_dataloader:
-                batch = tuple(t.to(device) for t in batch)
-                loss, accs = target_encoder.train_query(
-                    input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
-                    start_vecs=svs_t,
-                    end_vecs=evs_t,
-                    targets=tgts_t,
-                    p_targets=p_tgts_t,
+            for step_idx, (q_ids, questions, answers, titles, outs) in enumerate(pbar):
+                train_dataloader, _, _ = get_question_dataloader(
+                    questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
+                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args)
 
-                # Optimize, get acc and report
-                if loss is not None:
-                    if args.gradient_accumulation_steps > 1:
-                        loss = loss / args.gradient_accumulation_steps
-                    if args.fp16:
-                        with amp.scale_loss(loss, optimizer) as scaled_loss:
-                            scaled_loss.backward()
-                    else:
-                        loss.backward()
+                target_encoder.train()
+                svs_t = torch.Tensor(svs).to(device)
+                evs_t = torch.Tensor(evs).to(device)
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
 
-                    total_loss += loss.mean().item()
-                    if args.fp16:
-                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                    else:
-                        torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
-
-                    optimizer.step()
-                    scheduler.step()  # Update learning rate schedule
-                    target_encoder.zero_grad()
-
-                    pbar.set_description(
-                        f"Ep {ep_idx + 1} Tr loss: {loss.mean().item():.2f}, acc: {sum(accs) / len(accs):.3f}"
+                # Train query encoder
+                assert len(train_dataloader) == 1
+                for batch in train_dataloader:
+                    batch = tuple(t.to(device) for t in batch)
+                    loss, accs = target_encoder.train_query(
+                        input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                        start_vecs=svs_t,
+                        end_vecs=evs_t,
+                        targets=tgts_t,
+                        p_targets=p_tgts_t,
                     )
 
-                if accs is not None:
-                    total_accs += accs
-                    total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
-                else:
-                    total_accs += [0.0] * len(tgts_t)
-                    total_accs_k += [0.0] * len(tgts_t)
+                    # Optimize, get acc and report
+                    if loss is not None:
+                        if args.gradient_accumulation_steps > 1:
+                            loss = loss / args.gradient_accumulation_steps
+                        if args.fp16:
+                            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                                scaled_loss.backward()
+                        else:
+                            loss.backward()
 
-        step_idx += 1
-        logger.info(
-            f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
-            f"acc@1: {sum(total_accs) / len(total_accs):.3f} | acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
-        )
+                        total_loss += loss.mean().item()
+                        if args.fp16:
+                            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                        else:
+                            torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
 
-        # Evaluation
-        new_args = copy.deepcopy(args)
-        new_args.top_k = 10
-        new_args.save_pred = False
-        new_args.test_path = args.dev_path
-        dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer)
-        logger.info(f"Develoment set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+                        optimizer.step()
+                        scheduler.step()  # Update learning rate schedule
+                        target_encoder.zero_grad()
 
-        # Save best model
-        if dev_em > best_acc:
-            best_acc = dev_em
-            save_path = args.output_dir
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
-            target_encoder.save_pretrained(save_path)
-            logger.info(f"Saved best model with acc {best_acc:.3f} into {save_path}")
+                        pbar.set_description(
+                            f"Ep {ep_idx + 1} Tr loss: {loss.mean().item():.2f}, acc: {sum(accs) / len(accs):.3f}"
+                        )
 
-        if (ep_idx + 1) % 1 == 0:
-            logger.info('Updating pretrained encoder')
-            pretrained_encoder = copy.deepcopy(target_encoder)
+                    if accs is not None:
+                        total_accs += accs
+                        total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                    else:
+                        total_accs += [0.0] * len(tgts_t)
+                        total_accs_k += [0.0] * len(tgts_t)
 
-    print()
-    logger.info(f"Best model has acc {best_acc:.3f} saved as {save_path}")
+            step_idx += 1
+            logger.info(
+                f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
+                f"acc@1: {sum(total_accs) / len(total_accs):.3f} | acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
+            )
+
+            # Evaluation
+            new_args = copy.deepcopy(args)
+            new_args.top_k = 10
+            new_args.save_pred = False
+            new_args.test_path = args.dev_path
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer)
+            logger.info(f"Develoment set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+
+            # Save best model
+            if dev_em > best_acc:
+                best_acc = dev_em
+                save_path = args.output_dir
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
+                target_encoder.save_pretrained(save_path)
+                logger.info(f"Saved best model with acc {best_acc:.3f} into {save_path}")
+
+            if (ep_idx + 1) % 1 == 0:
+                logger.info('Updating pretrained encoder')
+                pretrained_encoder = copy.deepcopy(target_encoder)
+
+        print()
+        logger.info(f"Best model has acc {best_acc:.3f} saved as {save_path}")
+
+    # TODO: Add a "full" query-tuning training loop, i.e. joint first-hop + final-answer training
 
 
 def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args):
