@@ -384,9 +384,37 @@ all-open-data:
 	$(eval TEST_DATA=$(TEST_DATA),$(DATA_DIR)/open-qa/squad/test_preprocessed.json)
 	$(eval OPTIONS=--truecase)
 
+############## HotpotQA (multi-hop) ##############
+hotpotqa-open-data:
+    $(eval TRAIN_DATA=hotpotqa/hotpot_train_firsthop.json)
+    $(eval DEV_DATA=hotpotqa/hotpot_dev_firsthop.json)
+    $(eval TEST_DATA=hotpotqa/hotpot_test_firsthop.json)
+    $(eval OPTIONS=--truecase --agg_strat opt2 --label_strat doc --aggregate)
+    # TODO: Check --label_strat and --aggregate
+
 # Query-side fine-tuning
 train-query: dump-dir model-name nq-open-data large-index
 	python train_query.py \
+		--run_mode train_query \
+		--cache_dir $(CACHE_DIR) \
+		--train_path $(DATA_DIR)/$(TRAIN_DATA) \
+		--dev_path $(DATA_DIR)/$(DEV_DATA) \
+		--test_path $(DATA_DIR)/$(TEST_DATA) \
+		--per_gpu_train_batch_size 12 \
+		--eval_batch_size 12 \
+		--learning_rate 3e-5 \
+		--num_train_epochs 5 \
+		--dump_dir $(DUMP_DIR) \
+		--index_name start/$(NUM_CLUSTERS)_flat_$(INDEX_TYPE) \
+		--load_dir $(SAVE_DIR)/densephrases-multi \
+		--output_dir $(SAVE_DIR)/$(MODEL_NAME) \
+		--top_k 100 \
+		--cuda \
+		--save_pred \
+		$(OPTIONS)
+
+train-query-hotpot: dump-dir model-name hotpotqa-open-data large-index
+	python query_ftune.py \
 		--run_mode train_query \
 		--cache_dir $(CACHE_DIR) \
 		--train_path $(DATA_DIR)/$(TRAIN_DATA) \
