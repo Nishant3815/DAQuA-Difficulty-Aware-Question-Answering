@@ -389,8 +389,8 @@ hotpotqa-open-data:
     $(eval TRAIN_DATA=hotpotqa/hotpot_train_firsthop.json)
     $(eval DEV_DATA=hotpotqa/hotpot_dev_firsthop.json)
     $(eval TEST_DATA=hotpotqa/hotpot_test_firsthop.json)
-    $(eval OPTIONS=--truecase --agg_strat opt2 --label_strat doc --aggregate)
-    # TODO: Check --label_strat and --aggregate
+    $(eval OPTIONS=--truecase --agg_strat opt2 --label_strat phrase,doc --aggregate)
+    # TODO: Check --label_strat and --aggregate :  Done
 
 # Query-side fine-tuning
 train-query: dump-dir model-name nq-open-data large-index
