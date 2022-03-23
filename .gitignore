@@ -9,5 +9,5 @@ multihop_dense_retrieval/data
 multihop_dense_retrieval/models
 multihop_dense_retrieval/scripts/data.json
 multihop_dense_retrieval/scripts/densephrases
-DPhrases/hotpot_data
+DPhrases/hotpotqa
 DPhrases/ipynb_checkpoints/
