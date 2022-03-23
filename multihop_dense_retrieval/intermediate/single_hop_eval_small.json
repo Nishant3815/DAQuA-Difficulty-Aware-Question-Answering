@@ -1,0 +1,123 @@
+[
+    {
+        "query": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+        "gold_answer": "Chief of Protocol",
+        "predicted_answers": [
+            "Shirley Temple",
+            "Corliss Archer.",
+            "Joan",
+            "Joan Caulfield",
+            "Shirley Temple"
+        ]
+    },
+    {
+        "query": "What science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?",
+        "gold_answer": "Animorphs",
+        "predicted_answers": [
+            "Discworld",
+            "Lone Wolf",
+            "Star Trek",
+            "Serendipity",
+            "Discworld"
+        ]
+    },
+    {
+        "query": "The director of the romantic comedy \"Big Stone Gap\" is based in what New York city?",
+        "gold_answer": "Greenwich Village, New York City",
+        "predicted_answers": [
+            "Big Stone Gap",
+            "Rockford",
+            "Rockford, Illinois",
+            "Big Stone Gap",
+            "Los Angeles"
+        ]
+    },
+    {
+        "query": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+        "gold_answer": "YG Entertainment",
+        "predicted_answers": [
+            "Double X Entertainment",
+            "Lee Soo-man",
+            "Lee Soo-man",
+            "YS Media Entertainment",
+            "SM Entertainment"
+        ]
+    },
+    {
+        "query": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+        "gold_answer": "Eenasul Fateh",
+        "predicted_answers": [
+            "Ram Dass",
+            "Tony Pallante,",
+            "Rashidun al-Suri",
+            "Gana",
+            "James Zogby,"
+        ]
+    },
+    {
+        "query": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+        "gold_answer": "3,677 seated",
+        "predicted_answers": [
+            "ten thousand",
+            "7,500",
+            "4,000",
+            "$",
+            "8,000"
+        ]
+    },
+    {
+        "query": "Who is older, Annie Morton or Terry Richardson?",
+        "gold_answer": "Terry Richardson",
+        "predicted_answers": [
+            "Doris Speed",
+            "Nellie Bly",
+            "Diane Keaton",
+            "Diane Keaton has stated that Annie Hall",
+            "Jenny Cole"
+        ]
+    },
+    {
+        "query": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+        "gold_answer": "Kansas Song",
+        "predicted_answers": [
+            "the University of Kansas",
+            "Central Washington",
+            "Hail Varsity\"",
+            "Hail Varsity\".",
+            "Washington State University"
+        ]
+    },
+    {
+        "query": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and T\u00e9a Leoni?",
+        "gold_answer": "David Weissman",
+        "predicted_answers": [
+            "Don Jakoby",
+            "Jason Barker",
+            "Roy Iglesias",
+            "Majid Al Ansari.",
+            "Don Jakoby"
+        ]
+    },
+    {
+        "query": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+        "gold_answer": "1999",
+        "predicted_answers": [
+            "1992",
+            "1999",
+            "1975",
+            "2005",
+            "2001"
+        ]
+    },
+    {
+        "query": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+        "gold_answer": "from 1986 to 2013",
+        "predicted_answers": [
+            "Terry Byrne",
+            "Fabio Capello",
+            "Sir Alex Ferguson",
+            "Eric Harrison",
+            "Sir Alex Ferguson"
+        ]
+    }
+]

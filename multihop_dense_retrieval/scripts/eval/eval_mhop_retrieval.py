@@ -30,6 +30,9 @@ python scripts/eval/eval_mhop_retrieval.py \
     --gpu \
     --save-path intermediate/ret_results.json
 
+
+    python scripts/eval/eval_mhop_retrieval.py data/hotpot/hotpot_qas_val.json data/hotpot_index/wiki_index.npy data/hotpot_index/wiki_id2doc.json models/q_encoder.pt --hop1 intermediate/hotpot_qas_val_small.json --batch-size 11 --beam-size 5 --topk 5 --shared-encoder --hnsw --only-eval-ans --model-name roberta-base --save-path intermediate/ret_results.json
+
 """
 import argparse
 import collections
@@ -158,7 +161,8 @@ if __name__ == '__main__':
         json_data = data_file.read()
 
     hop1_data = json.loads(json_data)
-    questions = [obj["query"] for obj in hop1_data]
+    questions = [_["question"][:-1] if _["question"].endswith("?") else _["question"] for _ in ds_items]
+    # questions = [obj["query"] for obj in hop1_data]
     logger.info("len of questions is:" + str(len(questions)))
     hop1_predictions = [obj["predicted_answers"] for obj in hop1_data]
     # questions = [_["question"][:-1] if _["question"].endswith("?") else _["question"] for _ in ds_items]
@@ -167,7 +171,8 @@ if __name__ == '__main__':
     for b_start in tqdm(range(0, len(questions), args.batch_size)):
         with torch.no_grad():
             batch_q = questions[b_start:b_start + args.batch_size]
-            batch_ann = hop1_predictions[b_start:b_start + args.batch_size]
+            batch_ann = ds_items[b_start:b_start + args.batch_size]
+            hop1_pred_batch = hop1_predictions[b_start:b_start + args.batch_size]
             bsize = len(batch_q)
 
             logger.info("bsize is:" + str(bsize))
@@ -185,10 +190,10 @@ if __name__ == '__main__':
             query_pairs = []
             for b_idx in range(bsize):
                 for _, phrase in enumerate(hop1_predictions[b_idx]):
-                    if "roberta" in  args.model_name and phrase.strip() == "":
+                    # if "roberta" in  args.model_name and phrase.strip() == "":
                         # doc = "fadeaxsaa" * 100
                         # doc = id2doc[str(doc_id)]["title"]
-                        D[b_idx][_] = float("-inf")
+                        # D[b_idx][_] = float("-inf")
                     query_pairs.append((batch_q[b_idx], phrase))
 
             batch_q_sp_encodes = tokenizer.batch_encode_plus(query_pairs, max_length=args.max_q_sp_len, pad_to_max_length=True, return_tensors="pt")
@@ -230,20 +235,20 @@ if __name__ == '__main__':
                     # retrieved_titles.append(id2doc[str(hop_1_id)]["title"])
                     retrieved_titles.append(id2doc[str(hop_2_id)]["title"])
 
-                    # paths.append([str(hop_1_id), str(hop_2_id)])
+                    paths.append([str(hop_2_id)])
                     # path_titles.append([id2doc[str(hop_1_id)]["title"], id2doc[str(hop_2_id)]["title"]])
                     path_titles.append(id2doc[str(hop_2_id)]["title"])
                     # hop1_titles.append(id2doc[str(hop_1_id)]["title"])
                 
                 if args.only_eval_ans:
-                    gold_answers = hop1_predictions[idx]
+                    gold_answers = batch_ann[idx]["answer"]
                     concat_p = "yes no "
                     for p in paths:
                         concat_p += " ".join([id2doc[doc_id]["title"] + " " + id2doc[doc_id]["text"] for doc_id in p])
                     metrics.append({
-                        "question": questions[idx],
-                        "ans_recall": int(para_has_answer(gold_answers, concat_p, simple_tokenizer))
-                        # "type": batch_ann[idx].get("type", "single")
+                        "question": batch_ann[idx]["question"],
+                        "ans_recall": int(para_has_answer(gold_answers, concat_p, simple_tokenizer)),
+                        "type": batch_ann[idx].get("type", "single")
                     })
                     
                 else:
@@ -260,6 +265,7 @@ if __name__ == '__main__':
                     path_covered = [int(set(p) == set(sp)) for p in path_titles]
                     path_covered = np.sum(path_covered) > 0
                     recall_1 = 0
+                    # TODO: for this I need hop1_IDs and hop1_titles
                     # covered_1 = [sp_title in hop1_titles for sp_title in sp]
                     # if np.sum(covered_1) > 0: recall_1 = 1
                     metrics.append({
@@ -294,8 +300,8 @@ if __name__ == '__main__':
 
     logger.info(f"Evaluating {len(metrics)} samples...")
     type2items = collections.defaultdict(list)
-    # for item in metrics:
-    #     type2items[item["type"]].append(item)
+    for item in metrics:
+        type2items[item["type"]].append(item)
     if args.only_eval_ans:
         logger.info(f'Ans Recall: {np.mean([m["ans_recall"] for m in metrics])}')
         for t in type2items.keys():
