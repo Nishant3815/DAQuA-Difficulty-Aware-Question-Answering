@@ -252,10 +252,10 @@ def train_query_encoder(args, mips=None):
 
                     loss_hop1, accs_2 = target_encoder.train_query(
                         input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
-                        start_vecs=svs_t,
-                        end_vecs=evs_t,
-                        targets=tgts_t,
-                        p_targets=p_tgts_t,
+                        start_vecs=svs_t_sec,
+                        end_vecs=evs_t_sec,
+                        targets=tgts_t_sec,
+                        p_targets=p_tgts_t_sec,
                     )
 
                     if loss_hop1 and loss_hop2 is not None:  
@@ -296,8 +296,8 @@ def train_query_encoder(args, mips=None):
                 
             hop_step_idx += 1
             logger.info(
-                f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
-                f"acc@1: {sum(total_accs) / len(total_accs):.3f} | acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
+                f"Avg train loss ({hop_step_idx} iterations): {total_loss / step_idx:.2f} | train " +
+                f"acc@1: {sum(total_accs2) / len(total_accs2):.3f} | acc@{args.top_k}: {sum(total_accs_k2) / len(total_accs_k2):.3f}"
             )
 
             # Evaluation
