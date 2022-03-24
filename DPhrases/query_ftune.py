@@ -69,6 +69,8 @@ def train_query_encoder(args, mips=None):
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     step_per_epoch = math.ceil(len(load_qa_pairs(args.train_path, args)[1]) / args.per_gpu_train_batch_size)
+    # Get the total steps and prewarmup steps
+    t_prewarm = int(step_per_epoch // args.gradient_accumulation_steps * args.num_firsthop_epochs)
     t_total = int(step_per_epoch // args.gradient_accumulation_steps * args.num_train_epochs)
     logger.info(f"Train for {t_total} iterations")
     scheduler = get_linear_schedule_with_warmup(
@@ -80,8 +82,9 @@ def train_query_encoder(args, mips=None):
     # Train arguments
     args.per_gpu_train_batch_size = int(args.per_gpu_train_batch_size / args.gradient_accumulation_steps)
     best_acc = -1000.0
+    cnt = 0 # Counts uptill epochs where the training strategy needs a change 
 
-    if args.num_firsthop_epochs > 0:
+    if cnt < args.num_firsthop_epochs:
         # Warm-up the model with a first-hop retrieval objective
         for ep_idx in range(int(args.num_firsthop_epochs)):
             # Training
@@ -90,13 +93,13 @@ def train_query_encoder(args, mips=None):
             total_accs_k = []
 
             # Load training dataset
-            q_ids, questions, answers, titles = load_qa_pairs(args.train_path, args, shuffle=True)
+            q_ids, questions, answers, titles, full_answers = load_qa_pairs(args.train_path, args, shuffle=True)
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,
-                args.per_gpu_train_batch_size, args)
+                args.per_gpu_train_batch_size, args, final_answers)
             )
 
-            for step_idx, (q_ids, questions, answers, titles, outs) in enumerate(pbar):
+            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, outs_single) in enumerate(pbar):
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
@@ -180,11 +183,155 @@ def train_query_encoder(args, mips=None):
 
         print()
         logger.info(f"Best model has acc {best_acc:.3f} saved as {save_path}")
+    else:
+        # Run the full-training strategy accounting for loss from both the epochs 
+        for ep_idx in range(int(args.num_firsthop_epochs),int(args.num_train_epochs)):
+            total_loss = 0.0
+            loss_hop1    = 0.0
+            loss_hop2    = 0.0
+            total_accs_1  = []
+            total_accs2   = []
+            total_accs_k1 = []
+            total_accs_k2 = []
+            # Get questions and corresponding answers with other metadata
+            q_ids, questions, answers, titles, full_answers = load_qa_pairs(args.train_path, args, shuffle=True)
+
+            # Perform first hop search 
+            pbar_hop1 = tqdm(get_top_phrases(
+                mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,
+                args.per_gpu_train_batch_size, args, final_answers)
+            )
+            for hop_step_idx, (q_ids, questions, answers, titles, outs, final_answers, outs_single) in enumerate(pbar_hop1):
+
+                train_dataloader, _, _ = get_question_dataloader(
+                    questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
+                )
+
+                # Get first hop level start & end vectors alongwith targets
+                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args)
+                # Create updated query for second hop search
+                upd_questions = []
+                for (query, out_single) in zip(questions, outs_single):
+                    upd_questions.append(query + " "+ out_single)
+                # Use these updated query to perform another round of search 
+                # Pass final answers in place of answers
+                # To do: Think and Add condition related to aggregation so that phrase level retrieval occurs
+                # Might need to modify get_top_phrases function and add a conditional here 
+                pbar_hop2 = tqdm(get_top_phrases(
+                mips, q_ids, upd_questions, final_answers, titles, pretrained_encoder, tokenizer,
+                args.per_gpu_train_batch_size, args, final_answers)
+
+                # Get second hop level start & end vectors alongwith final targets 
+                # Passing questions/upd_questions should not have an impact (check question)
+                svs_sec, evs_sec, tgts_sec, p_tgts_sec = annotate_phrase_vecs(mips, q_ids, upd_questions, final_answers, titles, outs, args)
+
+                target_encoder.train()
+
+                svs_t = torch.Tensor(svs).to(device)
+                evs_t = torch.Tensor(evs).to(device)
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
+
+                svs_t_sec = torch.Tensor(svs_sec).to(device)
+                evs_t_sec = torch.Tensor(evs_sec).to(device)
+                tgts_t_sec = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_sec]
+                p_tgts_t_sec = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts_sec]
+
+
+
+                # Batch level computations for loss functions 
+                assert len(train_dataloader) == 1
+                for batch in train_dataloader:
+                    loss_hop1, accs_1 = target_encoder.train_query(
+                        input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                        start_vecs=svs_t,
+                        end_vecs=evs_t,
+                        targets=tgts_t,
+                        p_targets=p_tgts_t,
+                    )
+
+                    loss_hop1, accs_2 = target_encoder.train_query(
+                        input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                        start_vecs=svs_t,
+                        end_vecs=evs_t,
+                        targets=tgts_t,
+                        p_targets=p_tgts_t,
+                    )
+
+                    if loss_hop1 and loss_hop2 is not None:  
+                        if args.gradient_accumulation_steps > 1:
+                            loss =  (args.weight1* loss_hop1 + (args.weight2)*loss_hop2)/args.gradient_accumulation_steps #Add weight param in args (Todo)
+                        if args.fp16:
+                            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                                scaled_loss.backward()
+                        else:
+                            loss.backward()
+                        total_loss += loss.mean().item()
+                        if args.fp16:
+                            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                        else:
+                            torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
+
+                        optimizer.step()
+                        scheduler.step()  # Update learning rate schedule if reqired (ToDo)
+                        target_encoder.zero_grad()
+
+                        pbar.set_description(
+                            f"Ep {ep_idx + 1} Tr loss: {loss.mean().item():.2f}, acc1: {sum(accs1) / len(accs1):.3f}, acc2: {sum(accs2) / len(accs2):.3f}"
+                        )
+                    
+                    if accs1 is not None:
+                        total_accs1 += accs1
+                        total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                    else:
+                        total_accs_1 += [0.0] * len(tgts_t)
+                        total_accs_k += [0.0] * len(tgts_t)
+                    
+                    if accs2 is not None:
+                        total_accs2 += accs2
+                        total_accs_k2 += [len(tgt) > 0 for tgt in tgts_t_sec]
+                    else:
+                        total_accs_2 += [0.0] * len(tgts_t_sec)
+                        total_accs_k2 += [0.0] * len(tgts_t_sec)
+                
+            hop_step_idx += 1
+            logger.info(
+                f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
+                f"acc@1: {sum(total_accs) / len(total_accs):.3f} | acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
+            )
+
+            # Evaluation
+            new_args = copy.deepcopy(args)
+            new_args.top_k = 10
+            new_args.save_pred = False
+            new_args.test_path = args.dev_path
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer)
+            logger.info(f"Develoment set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+
+            # Save best model
+            if dev_em > best_acc:
+                best_acc = dev_em
+                save_path = args.output_dir
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
+                target_encoder.save_pretrained(save_path)
+                logger.info(f"Saved best model with acc {best_acc:.3f} into {save_path}")
+
+            if (ep_idx + 1) % 1 == 0:
+                logger.info('Updating pretrained encoder')
+                pretrained_encoder = copy.deepcopy(target_encoder)
+
+        print()
+        logger.info(f"Best model has acc {best_acc:.3f} saved as {save_path}")
 
     # TODO: Add a "full" query-tuning training loop, i.e. joint first-hop + final-answer training
+    # Update: Added a boilerplate code for iteration n fine-tuning development script
+    # TO DO: Run & Reverify the pipeline and resolve known & unknown issues 
+    # Known Issues: Initially assumed outs is a list of top_k phrases but takes dictionary form (see annotate phrase vecs dummy)
+    # Change in args and see what internal parameters to change with args so that second hop runs and see if need to redefine scheduler (mostly not)
+    
 
-
-def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args):
+def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers):
     # Search
     step = batch_size
     phrase_idxs = []
@@ -204,9 +351,15 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
             top_k=args.top_k, return_idxs=True,
             max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=args.agg_strat,
         )
+
+        # Get single top results
+        outs_single = []
+        for out in outs:
+            outs_single.append(out[0])
+
         yield (
             q_ids[q_idx:q_idx + step], questions[q_idx:q_idx + step], answers[q_idx:q_idx + step],
-            titles[q_idx:q_idx + step], outs
+            titles[q_idx:q_idx + step], outs, final_answers[q_idx:q_idx + step], outs_single
         )
 
 
