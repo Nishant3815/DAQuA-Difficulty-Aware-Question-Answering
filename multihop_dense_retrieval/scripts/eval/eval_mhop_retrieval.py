@@ -165,7 +165,7 @@ if __name__ == '__main__':
     # questions = [obj["query"] for obj in hop1_data]
     logger.info("len of questions is:" + str(len(questions)))
     hop1_predictions = [obj["predicted_answers"] for obj in hop1_data]
-    # questions = [_["question"][:-1] if _["question"].endswith("?") else _["question"] for _ in ds_items]
+    hop1_doc_titles = [obj["predicted_titles"] for obj in hop1_data]
     metrics = []
     retrieval_outputs = []
     for b_start in tqdm(range(0, len(questions), args.batch_size)):
@@ -173,6 +173,7 @@ if __name__ == '__main__':
             batch_q = questions[b_start:b_start + args.batch_size]
             batch_ann = ds_items[b_start:b_start + args.batch_size]
             hop1_pred_batch = hop1_predictions[b_start:b_start + args.batch_size]
+            hop1_doc_title_batch = hop1_doc_titles[b_start:b_start + args.batch_size]
             bsize = len(batch_q)
 
             logger.info("bsize is:" + str(bsize))
@@ -189,12 +190,12 @@ if __name__ == '__main__':
             # 2hop search
             query_pairs = []
             for b_idx in range(bsize):
-                for _, phrase in enumerate(hop1_predictions[b_idx]):
+                for _, (phrase,doc_title) in enumerate(zip(hop1_pred_batch[b_idx],hop1_doc_title_batch[b_idx])):
                     # if "roberta" in  args.model_name and phrase.strip() == "":
                         # doc = "fadeaxsaa" * 100
                         # doc = id2doc[str(doc_id)]["title"]
                         # D[b_idx][_] = float("-inf")
-                    query_pairs.append((batch_q[b_idx], phrase))
+                    query_pairs.append((batch_q[b_idx], phrase, doc_title[0]))
 
             batch_q_sp_encodes = tokenizer.batch_encode_plus(query_pairs, max_length=args.max_q_sp_len, pad_to_max_length=True, return_tensors="pt")
             batch_q_sp_encodes = move_to_cuda(dict(batch_q_sp_encodes))
