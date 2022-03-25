@@ -1,5 +1,6 @@
 from IPython import embed
 import json
+import unicodedata
 
 # Arguments: Presently hard-coded; TODO: Add argparse later on
 PREDICTIONS_PATH = "./data.json"
@@ -11,8 +12,13 @@ def read_results(path):
     return results
 
 
+def normalize(text):
+    """Resolve different type of unicode encodings."""
+    return unicodedata.normalize('NFD', text)
+
+
 def lower_list(l):
-    return list(map(str.lower, l))
+    return list(map(lambda x: str.lower(normalize(x)), l))
 
 
 def metric_em(gold, preds):
@@ -75,17 +81,17 @@ def write_eval_results(path, obj):
     with open(path, 'w') as fp:
         json.dump(obj, fp, indent=4)
 
-
+        
 def compute_metrics(results):
     """
     Run each evaluation metric on the predictions and aggregate results
     """
     total = len(results)
     metrics = {
-        "em": metric_em,
-        "substr_gp": metric_substr_gp,
-        "substr_pg": metric_substr_pg,
-        "substr2": metric_substr_2way,
+        "em": metric_em, 
+        "substr_gp": metric_substr_gp, 
+        "substr_pg": metric_substr_pg, 
+        "substr2": metric_substr_2way, 
         "overlap": overlap_coeff
     }
     eval_dict = {
@@ -96,19 +102,71 @@ def compute_metrics(results):
 
     # Run evaluations
     for r in results:
-        gold = r['gold_answer'].lower()
+        gold = normalize(r['gold_answer']).lower()
         preds = lower_list(r['predicted_answers'])
         # Accumulate
         for m in metrics:
             eval_dict[m] += metrics[m](gold, preds)
     # Normalize
+    overall = 0.
     for m in metrics:
-        eval_dict[m] = round(eval_dict[m] / total * 100, 2)
+        eval_dict[m] = round(eval_dict[m]/total * 100, 2)
+        overall += eval_dict[m]
+    overall /= len(metrics)
+    eval_dict['overall_avg'] = round(overall, 2)
 
     print(json.dumps(eval_dict, indent=2))
     return eval_dict
 
 
+def compare_predictions(first, second, unique=True, union_gold=False):
+    total = len(first)
+    metrics = {
+        "em": metric_em, 
+        "substr_gp": metric_substr_gp, 
+        "substr_pg": metric_substr_pg, 
+        "substr2": metric_substr_2way, 
+        "overlap": overlap_coeff
+    }
+    eval_dict = {
+        "n_questions": total,
+    }
+    for m in metrics:
+        eval_dict[m] = 0.
+        
+    norm_const = 0
+    for i in range(total):
+        first_preds = list(set(first[i]['predicted_answers'])) if unique else first[i]['predicted_answers']
+        second_preds = list(set(second[i]['predicted_answers'])) if unique else second[i]['predicted_answers']
+        if not union_gold:
+            for f in first_preds:
+                norm_const += 1
+                gold = normalize(f).lower()
+                preds = lower_list(second_preds)
+                # Accumulate
+                for m in metrics:
+                    eval_dict[m] += metrics[m](gold, preds)
+        else:
+            norm_const += 1
+            union = list(set(first_preds + second_preds))
+            gold = normalize(first[i]['gold_answer']).lower()
+            preds = lower_list(union)
+            # Accumulate
+            for m in metrics:
+                eval_dict[m] += metrics[m](gold, preds)
+            
+    # Normalize
+    overall = 0.
+    for m in metrics:
+        eval_dict[m] = round(eval_dict[m] / norm_const * 100, 2)
+        overall += eval_dict[m]
+    overall /= len(metrics)
+    eval_dict['overall_avg'] = overall
+
+    print(json.dumps(eval_dict, indent=2))
+    return eval_dict
+        
+    
 if __name__ == "__main__":
     # Read data from disk
     print(f"Reading predictions from {PREDICTIONS_PATH}")

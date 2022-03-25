@@ -132,30 +132,39 @@ def get_second_hop_retrieval(hop_phrases, hop_metadata, n_ins, top_k):
     """
     hop_phrases_flat = [phrase_val for li in hop_phrases for phrase_val in li]
     hop_phrase_score_flat = [sub['score'] for mdata in hop_metadata for sub in mdata]
+    hop_phrase_title_flat = [sub['title'] for mdata in hop_metadata for sub in mdata]
     phrase_sc_2 = np.array(hop_phrase_score_flat).reshape((-1, top_k, top_k))
     phrase_arr_2 = np.array(hop_phrases_flat).reshape((-1, top_k, top_k))
+    phrase_title_2 = np.array(hop_phrase_title_flat).reshape((-1, top_k, top_k))
 
-    return phrase_sc_2, phrase_arr_2
+    return phrase_sc_2, phrase_arr_2, phrase_title_2
 
 
-def get_top_chains(scores_1, scores_2, doc_id_1, doc_id_2, top_k, n_sel):
+def get_top_chains(scores_1, scores_2, doc_id_1, doc_id_2, top_k, n_sel, mult_scores=True, titles1=None, titles2=None):
     """
     Get the scores for a single question at hop 1 and hop 2 and for corresponding phrase combination,
     return the combination of phrase at hop 1 and hop 2 that gave best overall score product.
     """
-    path_scores = np.expand_dims(scores_1, axis=2) * scores_2
+    path_scores = np.expand_dims(scores_1, axis=2) * scores_2 if mult_scores else np.expand_dims(scores_1, axis=2) + scores_2
     search_scores = np.squeeze(path_scores)
     ranked_pairs = np.vstack(np.unravel_index(np.argsort(search_scores.ravel())[::-1],
                                               (top_k, top_k))).transpose()
-    chains, answers = [], []
+    chains, answers, title_chains, title = [], [], [], []
     for _ in range(n_sel):
         path_ids = ranked_pairs[_]
         did_1 = doc_id_1[0][path_ids[0]]
         did_2 = doc_id_2[0][path_ids[0]][path_ids[1]]
+        
+        if titles1 is not None and titles2 is not None:
+            titles_1 = titles1[0][path_ids[0]]
+            titles_2 = titles2[0][path_ids[0]][path_ids[1]]
+            title_chains.append([titles_1, titles_2])
+            title.append(titles_2)
+        
         chains.append([did_1, did_2])
         answers.append(did_2)
 
-    return chains, answers
+    return chains, answers, title_chains, title
 
 
 def pad_array(arr, length_1, length_2=None, pad_token=''):
@@ -168,7 +177,7 @@ def pad_array(arr, length_1, length_2=None, pad_token=''):
     return arr
 
 
-def run_chain_all_queries(query_list, phrase_sc_1, phrase_sc_2, phrase_arr_1, phrase_arr_2, top_k, n_sel, answers=None):
+def run_chain_all_queries(query_list, phrase_sc_1, phrase_sc_2, phrase_arr_1, phrase_arr_2, top_k, n_sel, answers=None, mult_scores=True, titles1=None, titles2=None):
     """
     For a given query, find the # of n_sel chains based on top_k phrases from Dense Phrases module
     """
@@ -180,20 +189,26 @@ def run_chain_all_queries(query_list, phrase_sc_1, phrase_sc_2, phrase_arr_1, ph
         doc_id_1 = np.array(pad_array(phrase_arr_1[num_q], top_k)).reshape(1, top_k)
         doc_id_2 = np.array(pad_array(phrase_arr_2[num_q], top_k, top_k)).reshape(1, top_k, top_k)
 
+        if titles1 is not None and titles2 is not None:
+            titles_1 = np.array(titles1[num_q]).reshape(1, top_k)
+            titles_2 = np.array(titles2[num_q]).reshape(1, top_k, top_k)
+        
         # Use Get Top Chain Function to retrieve best chains for this question
-        chain, preds = get_top_chains(scores_1, scores_2, doc_id_1, doc_id_2, top_k, n_sel)
+        chain, preds, title_chains, titles = get_top_chains(scores_1, scores_2, doc_id_1, doc_id_2, top_k, n_sel, mult_scores, titles_1, titles_2)
 
         obj = {
             "query": query_list[num_q],
             "gold_answer": answers[num_q] if answers is not None else None,
             "predicted_answers": preds,
+            "predicted_titles": titles,
             "predicted_chains": chain,
+            "predicted_title_chains": title_chains
         }
         qchain_arr.append(obj)
     return qchain_arr
 
 
-def get_1hop_results(query_list, predictions, n_sel, answers=None):
+def get_1hop_results(query_list, predictions, n_sel, answers=None, metadata=None):
     res = []
     for num_q in range(len(query_list)):
         obj = {
@@ -201,6 +216,8 @@ def get_1hop_results(query_list, predictions, n_sel, answers=None):
             "gold_answer": answers[num_q] if answers is not None else None,
             "predicted_answers": predictions[num_q][:n_sel],
         }
+        if metadata is not None:
+            obj["predicted_titles"] = [m["title"] for m in metadata[num_q][:n_sel]]
         res.append(obj)
     return res
 
@@ -208,21 +225,22 @@ def get_1hop_results(query_list, predictions, n_sel, answers=None):
 def prune_to_topk(obj, topk, unique=False):
     res = []
     for o in obj:
-        if not unique:
-            res.append(o[:topk])
-        else:
-            seen = set()
-            o_res = []
-            is_meta = type(o[0]) is dict
-            for oo in o:
-                answer = oo if not is_meta else oo['answer']
-                if answer not in seen:
-                    seen.add(answer)
-                    o_res.append(oo)
-                    if len(seen) == topk:
-                        res.append(o_res)
-                        break
-                    
+        # if not unique:
+        #     res.append(o[:topk])
+        # else:
+        seen = set()
+        o_res = []
+        is_meta = type(o[0]) is dict
+        for oo in o:
+            answer = oo if not is_meta else oo['answer']
+            if answer not in seen:
+                seen.add(answer)
+                o_res.append(oo)
+                if len(seen) == topk:
+                    break
+        if not unique or topk == len(o_res):
+            res.append(o_res + [o_res[0]]*(topk-len(o_res)))
+                
     if len(res) != len(obj):
         raise ValueError(f"Only {len(res)} / {len(obj)} instances pruned to top-K")
     return res
@@ -239,22 +257,26 @@ def get_key(dictionary, key, size=-1):
     return res
 
 
-def read_queries(path):
+def read_queries(path, bridge_only=True):
     res = []
     with open(path, 'r') as fp:
         print(f"Loading data from {path}")
         lines = fp.readlines()
         for l in lines:
             obj = json.loads(l)
-            if obj["type"] == "bridge":
-                res.append(obj)
-    print(f"Found {len(res)} bridge questions in {len(lines)} total questions.")
+            if bridge_only:
+                if obj["type"] == "bridge":
+                    res.append(obj)
+    if bridge_only:
+        print(f"Found {len(res)} bridge questions in {len(lines)} total questions.")
+    else:
+        print(f"Found {len(lines)} total questions.")
     return res
 
 
 def run_batch_inference(model, query_list, strip_ques1, strip_prompt1, strip_ques2, strip_prompt2, ret_unit1, ret_unit2,
-                        ques_terms, method, strip_prompt_mode, answers=None, write=False, top_k=top_k, silent=True,
-                        single_hop=False, debug=False):
+                        ques_terms, method, strip_prompt_mode, answers=None, write=False, top_k=top_k, mult_scores=True,
+                        silent=True, single_hop=False, debug=False):
     n_sel = top_k
     
     if debug:
@@ -282,9 +304,10 @@ def run_batch_inference(model, query_list, strip_ques1, strip_prompt1, strip_que
                 print("Error: Pruning resulted in <top-K results")
             return recurse(i+1, silent=silent)
     retunit, metadata = recurse(silent=silent)
+    titles1 = [[mi["title"] for mi in m] for m in metadata]
 
     if single_hop:
-        out_dict = get_1hop_results(query_list, retunit, n_sel, answers)
+        out_dict = get_1hop_results(query_list, retunit, n_sel, answers, metadata)
     else:
         # Get phrase scores separately from metadata for first hop
         retunit_sc_1 = get_first_hop_phrase_score_list(metadata, top_k)
@@ -316,13 +339,16 @@ def run_batch_inference(model, query_list, strip_ques1, strip_prompt1, strip_que
         hop_retunit, hop_metadata = recurse(silent=silent)
 
         # Get score and phrase list from second retrieval for evidence chain extraction
-        retunit_sc_2, retunit_arr_2 = get_second_hop_retrieval(hop_retunit, hop_metadata, n_ins, top_k)
+        retunit_sc_2, retunit_arr_2, retunit_title_2 = get_second_hop_retrieval(hop_retunit, hop_metadata, n_ins, top_k)
 
         if not silent:
             print("Creating final dictionary")
+        
+        
+        
         # Get final chain of best n_sel queries for each question
         out_dict = run_chain_all_queries(query_list, retunit_sc_1, retunit_sc_2, retunit, retunit_arr_2, top_k, n_sel,
-                                         answers)
+                                         answers, mult_scores, titles1=titles1, titles2=retunit_title_2)
 
     if write:
         # Dump information inside a JSON file
