@@ -138,7 +138,7 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
     if shuffle:
         qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers))
         random.shuffle(qa_pairs)
-        q_ids, questions, answers, titles = zip(*qa_pairs)
+        q_ids, questions, answers, titles, final_answers = zip(*qa_pairs)
         logger.info(f'Shuffling QA pairs')
 
     if args.draft:
