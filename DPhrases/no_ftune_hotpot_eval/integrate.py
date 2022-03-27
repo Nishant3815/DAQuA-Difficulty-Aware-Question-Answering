@@ -2,6 +2,7 @@ from IPython import embed
 from tqdm import tqdm
 import json
 import numpy as np
+import unicodedata
 
 from densephrases import DensePhrases
 
@@ -33,6 +34,10 @@ single_hop = False
 query_list = ["What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?", \
               "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?"]
 
+
+def normalize(text):
+    """Resolve different type of unicode encodings."""
+    return unicodedata.normalize('NFD', text)
 
 def load_densephrase_module(load_dir=load_dir, dump_dir=dump_dir, index_name=idx_name, device=device):
     """
@@ -257,7 +262,7 @@ def get_key(dictionary, key, size=-1):
     return res
 
 
-def read_queries(path, bridge_only=True):
+def read_queries(path, bridge_only=True, filter_yes_no=False):
     res = []
     with open(path, 'r') as fp:
         print(f"Loading data from {path}")
@@ -265,12 +270,13 @@ def read_queries(path, bridge_only=True):
         for l in lines:
             obj = json.loads(l)
             if bridge_only:
-                if obj["type"] == "bridge":
-                    res.append(obj)
-    if bridge_only:
-        print(f"Found {len(res)} bridge questions in {len(lines)} total questions.")
-    else:
-        print(f"Found {len(lines)} total questions.")
+                if obj["type"] != "bridge":
+                    continue
+            if filter_yes_no:
+                if str.lower(obj["answer"][0]) in ["yes", "no"]:
+                    continue
+            res.append(obj)
+    print(f"Read {len(res)} questions in {len(lines)} total questions.")
     return res
 
 
@@ -356,6 +362,52 @@ def run_batch_inference(model, query_list, strip_ques1, strip_prompt1, strip_que
             json.dump(out_dict, fp, indent=4)
 
     return out_dict
+
+
+def run_oracle_inference(model, question, updated_qs, answer, ret_unit="phrase", write=False, top_k=top_k, silent=True):
+    n_sel = top_k
+
+    # Run the model to retrieve the first hop of phrases and their corresponding scores
+    if not silent:
+        print("Running DensePhrases search for retrieval ...")
+    def recurse(i=4, silent=True):
+        try:
+            if not silent:
+                print(f"Fetching top-k={top_k*(2**i)} results")
+            retunit, metadata = model.search(updated_qs, retrieval_unit=ret_unit, top_k=top_k*(2**i), return_meta=True)
+            retunit = prune_to_topk(retunit, top_k, unique=True)
+            metadata = prune_to_topk(metadata, top_k, unique=True)
+            return retunit, metadata
+        except ValueError:
+            if not silent:
+                print("Error: Pruning resulted in <top-K results")
+            return recurse(i+1, silent=silent)
+    retunit, metadata = recurse(silent=silent)
+    
+    # Flatten
+    flat_retunit = []
+    for r in retunit:
+        flat_retunit += r
+    flat_metadata = []
+    for m in metadata:
+        flat_metadata += m
+    
+    # Sort and merge
+    sort_preds = sorted(zip(flat_retunit,flat_metadata), key=lambda x: -x[1]['score'])
+    sorted_retunit, sorted_metadata = list(zip(*sort_preds))
+    
+    # Pick top-K
+    topk_ret = prune_to_topk([sorted_retunit], top_k, unique=True)[0]
+    topk_meta = prune_to_topk([sorted_metadata], top_k, unique=True)[0]
+    
+    res = {
+        'query': normalize(question),
+        'gold_answer': normalize(answer),
+        'predicted_answers': topk_ret,
+        'predicted_titles': [m['title'] for m in topk_meta]
+    }
+    
+    return res
 
 
 if __name__ == "__main__":
