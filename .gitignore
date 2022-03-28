@@ -10,4 +10,7 @@ multihop_dense_retrieval/models
 multihop_dense_retrieval/scripts/data.json
 multihop_dense_retrieval/scripts/densephrases
 DPhrases/hotpotqa
-DPhrases/ipynb_checkpoints/
+DPhrases/.ipynb_checkpoints/
+DPhrases/.helper.py.swp
+DPhrases/__pycache__/
+DPhrases/helper.py

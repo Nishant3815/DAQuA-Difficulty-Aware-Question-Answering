@@ -209,21 +209,20 @@ def train_query_encoder(args, mips=None):
 
                 # Get first hop level start & end vectors alongwith targets
                 svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args)
+
                 # Create updated query for second hop search
                 upd_questions = []
                 for (query, out_single) in zip(questions, outs_single):
                     upd_questions.append(query + " "+ out_single)
-                # Use these updated query to perform another round of search 
-                # Pass final answers in place of answers
-                # To do: Think and Add condition related to aggregation so that phrase level retrieval occurs
-                # Might need to modify get_top_phrases function and add a conditional here 
-                pbar_hop2 = tqdm(get_top_phrases(
-                mips, q_ids, upd_questions, final_answers, titles, pretrained_encoder, tokenizer,
-                args.per_gpu_train_batch_size, args, final_answers)
-
+                
+                # Get results for second hop (Not using yield here)
+                outs_sec = get_top_phrase_step2(mips, q_ids, upd_questions, final_answers, titles, pretrained_encoder, tokenizer, args.per_gpu_train_batch_size, args, final_answers)
+               
                 # Get second hop level start & end vectors alongwith final targets 
                 # Passing questions/upd_questions should not have an impact (check question)
-                svs_sec, evs_sec, tgts_sec, p_tgts_sec = annotate_phrase_vecs(mips, q_ids, upd_questions, final_answers, titles, outs, args)
+                svs_sec, evs_sec, tgts_sec, p_tgts_sec = annotate_phrase_vecs(mips, q_ids, upd_questions, final_answers, titles, outs_sec, args)
+                # Get loader representation for second hop
+                train_dataloader2, _, _ = get_question_dataloader(upd_questions, tokenizer, 64, batch_size=12)
 
                 target_encoder.train()
 
@@ -241,7 +240,8 @@ def train_query_encoder(args, mips=None):
 
                 # Batch level computations for loss functions 
                 assert len(train_dataloader) == 1
-                for batch in train_dataloader:
+                assert len(train_dataloader2) == 1
+                for batch,batch2 in zip(train_dataloader,train_dataloader2):
                     loss_hop1, accs_1 = target_encoder.train_query(
                         input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
                         start_vecs=svs_t,
@@ -250,17 +250,19 @@ def train_query_encoder(args, mips=None):
                         p_targets=p_tgts_t,
                     )
 
-                    loss_hop1, accs_2 = target_encoder.train_query(
-                        input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                    loss_hop2, accs_2 = target_encoder.train_query(
+                        input_ids_=batch2[0], attention_mask_=batch2[1], token_type_ids_=batch2[2],
                         start_vecs=svs_t_sec,
                         end_vecs=evs_t_sec,
                         targets=tgts_t_sec,
                         p_targets=p_tgts_t_sec,
                     )
 
-                    if loss_hop1 and loss_hop2 is not None:  
+                    if loss_hop1 and loss_hop2:  
+                        # print("Entering loop for update")
                         if args.gradient_accumulation_steps > 1:
-                            loss =  (args.weight1* loss_hop1 + (args.weight2)*loss_hop2)/args.gradient_accumulation_steps #Add weight param in args (Todo)
+                            # TODO: Weights of two losses needs to be through args param later
+                            loss =  (0.5* loss_hop1 + 0.5*loss_hop2)/args.gradient_accumulation_steps 
                         if args.fp16:
                             with amp.scale_loss(loss, optimizer) as scaled_loss:
                                 scaled_loss.backward()
@@ -352,10 +354,13 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
             max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=args.agg_strat,
         )
 
-        # Get single top results
         outs_single = []
         for out in outs:
-            outs_single.append(out[0])
+            out_ins = ''
+            # Appends all the retrieved phrases (Might need change in logic later)
+            for i in range(len(out)):
+                out_ins = out_ins + " " + out[i]['answer']
+            outs_single.append(out_ins)
 
         yield (
             q_ids[q_idx:q_idx + step], questions[q_idx:q_idx + step], answers[q_idx:q_idx + step],
@@ -432,6 +437,29 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         p_targets = [[ii if val else None for ii, val in enumerate(target)] for target in p_targets]
 
     return start_vecs, end_vecs, targets, p_targets
+
+def get_top_phrase_step2(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers):
+    # Yield can't be used with the second updated queries and we need outs_sec from the updated queries
+
+    phrase_idxs = []
+    search_fn = mips.search
+    query2vec = get_query2vec(
+        query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size
+    )
+    outs_ques = query2vec(questions)
+    start = np.concatenate([out[0] for out in outs_ques], 0)
+    end = np.concatenate([out[1] for out in outs_ques], 0)
+    query_vec = np.concatenate([start, end], 1)
+
+    outs_sec = search_fn(
+        query_vec,
+        q_texts=questions, nprobe=args.nprobe,
+        top_k=args.top_k, return_idxs=True,
+        max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=args.agg_strat,
+    )
+
+    return outs_sec
+
 
 
 if __name__ == '__main__':
