@@ -193,6 +193,10 @@ class Options():
         self.parser.add_argument("--num_firsthop_epochs", type=int, default=1,
                                  help="Number of warmup epochs to train model for first hop retrieval")
         self.parser.add_argument("--warmup_only", action="store_true", help="Run only multi-hop warmup fine-tuning")
+        self.parser.add_argument('--warmup_label_strat', default='sent,doc', type=str,
+                                 help="label strat={phrase|sent|doc|phrase,doc|sent,doc}")
+        self.parser.add_argument('--warmup_agg_strat', type=str, default='opt2a')
+
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
