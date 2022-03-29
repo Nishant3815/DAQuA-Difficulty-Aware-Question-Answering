@@ -17,7 +17,7 @@ from densephrases.utils.squad_utils import get_question_dataloader
 from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
 from densephrases.utils.eval_utils import drqa_exact_match_score, drqa_regex_match_score, \
-    drqa_metric_max_over_ground_truths
+    drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_exact_match_score
 from eval_phrase_retrieval import evaluate
 from densephrases import Options
 
@@ -112,23 +112,27 @@ def train_query_encoder(args, mips=None):
         # Progress bar
         pbar = tqdm(get_top_phrases(
             mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,
-            args.per_gpu_train_batch_size, args, final_answers)
+            args.per_gpu_train_batch_size, args, final_answers, agg_strat=args.warmup_agg_strat)
         )
 
-        for step_idx, (q_ids, questions, answers, titles, outs, final_answers, outs_single) in enumerate(pbar):
-            # outs contains topk phrases for each query
-            # outs_single contains appended topk phrases as a single string for each query
+        for step_idx, (q_ids, questions, answers, titles, outs, final_answers, _) in enumerate(pbar):
+            # INFO: outs contains topk phrases for each query
 
             train_dataloader, _, _ = get_question_dataloader(
                 questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
             )
-            svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args)
+            svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args,
+                                                          label_strat=args.warmup_label_strat)
 
             target_encoder.train()
-            svs_t = torch.Tensor(svs).to(device)
+            # Start vectors
+            svs_t = torch.Tensor(svs).to(device)  # shape: (bs, 2*topk, hid_dim)
+            # End vectors
             evs_t = torch.Tensor(evs).to(device)
-            tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]  # Target indices for phrases
-            p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]  # Target indices for doc
+            # Target indices for phrases
+            tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
+            # Target indices for doc
+            p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
 
             # Train query encoder
             assert len(train_dataloader) == 1
@@ -159,7 +163,6 @@ def train_query_encoder(args, mips=None):
                         torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
 
                     optimizer.step()
-                    # TODO: Should this be done every iteration instead of every epoch?
                     scheduler.step()  # Update learning rate schedule
                     target_encoder.zero_grad()
 
@@ -224,6 +227,8 @@ def train_query_encoder(args, mips=None):
                 args.per_gpu_train_batch_size, args, final_answers)
             )
             for hop_step_idx, (q_ids, questions, answers, titles, outs, final_answers, outs_single) in enumerate(pbar_hop1):
+                # outs contains topk phrases for each query
+                # outs_single contains appended topk phrases as a single string for each query
 
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
@@ -355,7 +360,8 @@ def train_query_encoder(args, mips=None):
     # Change in args and see what internal parameters to change with args so that second hop runs and see if need to redefine scheduler (mostly not)
     
 
-def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers):
+def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers,
+                    agg_strat=None):
     # Search
     step = batch_size
     search_fn = mips.search
@@ -368,11 +374,16 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
         end = np.concatenate([out[1] for out in outs], 0)
         query_vec = np.concatenate([start, end], 1)
 
+        agg_strat = agg_strat if agg_strat is not None else args.agg_strat
+        # For multi-hop warmup training
+        return_sent = agg_strat == "opt2a"
+
         outs = search_fn(
             query_vec,
             q_texts=questions[q_idx:q_idx + step], nprobe=args.nprobe,
             top_k=args.top_k, return_idxs=True,
             max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=args.agg_strat,
+            return_sent=return_sent
         )
 
         outs_single = []
@@ -389,16 +400,12 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
         )
 
 
-def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups, args):
+def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups, args, label_strat=None):
     assert mips is not None
     batch_size = len(answers)
+    label_strat = label_strat if label_strat is not None else args.label_strat
+    # Phrase groups are in size of (batch, top_k, emb_size)
 
-    # Phrase groups are in size of [batch, top_k, values]
-    # phrase_groups = [[(
-    #     out_['doc_idx'], out_['start_idx'], out_['end_idx'], out_['answer'],
-    #     out_['start_vec'], out_['end_vec'], out_['context'], out_['title'])
-    #     for out_ in out] for out in outs
-    # ]
     dummy_group = {
         'doc_idx': -1,
         'start_idx': 0, 'end_idx': 0,
@@ -439,7 +446,7 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
     # TODO: implement dynamic label_strategy based on the task name (label_strat = dynamic)
 
     # Annotate for L_phrase
-    if 'phrase' in args.label_strat.split(','):
+    if 'phrase' in label_strat.split(','):
         match_fns = [
             drqa_regex_match_score if args.regex or ('trec' in q_id.lower()) else drqa_exact_match_score for q_id in
             q_ids
@@ -450,8 +457,29 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         ]
         targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
 
+    # Annotate for L_sent (added for multi-hop warmup)
+    # Checking if the predicted phrase is in the gold annotated sentences or not
+    if 'sent' in label_strat.split(','):
+        match_fns = [drqa_substr_match_score for q_id in q_ids]
+        targets = [
+            [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
+            for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
+        ]
+        targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
+
+    if 'sent2' in label_strat.split(','):
+        match_fns = [drqa_substr_exact_match_score for q_id in q_ids]
+        targets = [
+            [drqa_metric_max_over_ground_truths(match_fn, {
+                'substr': phrase['answer'],
+                'exact': phrase['context']
+            }, answer_set, substr_exact=True) for phrase in phrase_group]  # phrase_group is the top-k predictions
+            for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
+        ]
+        targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
+
     # Annotate for L_doc
-    if 'doc' in args.label_strat.split(','):
+    if 'doc' in label_strat.split(','):
         p_targets = [
             [any(phrase['title'][0].lower() == tit.lower() for tit in title) for phrase in phrase_group]
             for phrase_group, title in zip(phrase_groups, titles)

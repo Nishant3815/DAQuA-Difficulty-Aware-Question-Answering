@@ -61,6 +61,20 @@ def drqa_exact_match_score(prediction, ground_truth):
     return normalize_answer(prediction) == normalize_answer(ground_truth)
 
 
+def drqa_substr_match_score(prediction, ground_truth):
+    """Check if the prediction is a (soft) substring match with the ground truth."""
+    return normalize_answer(prediction) in normalize_answer(ground_truth)
+
+
+def drqa_substr_exact_match_score(pred_substr, pred_exact, ground_truth):
+    """
+    Check if pred_substr is a (soft) substring match with the ground truth
+    AND
+    if pred_exact is a (soft) exact match with the ground truth
+    """
+    return drqa_substr_match_score(pred_substr, ground_truth) and drqa_exact_match_score(pred_exact, ground_truth)
+
+
 def drqa_regex_match_score(prediction, pattern):
     """Check if the prediction matches the given regular expression."""
     try:
@@ -75,13 +89,16 @@ def drqa_regex_match_score(prediction, pattern):
     return compiled.match(prediction) is not None
 
 
-def drqa_metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
+def drqa_metric_max_over_ground_truths(metric_fn, prediction, ground_truths, substr_exact=False):
     """Given a prediction and multiple valid answers, return the score of
     the best prediction-answer_n pair given a metric function.
     """
     scores_for_ground_truths = []
     for ground_truth in ground_truths:
-        score = metric_fn(prediction, ground_truth)
+        if not substr_exact:
+            score = metric_fn(prediction, ground_truth)
+        else:
+            score = metric_fn(prediction['substr'], prediction['exact'], ground_truth)
         scores_for_ground_truths.append(score)
     return max(scores_for_ground_truths)
 
