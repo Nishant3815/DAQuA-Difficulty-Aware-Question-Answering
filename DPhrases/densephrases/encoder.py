@@ -113,8 +113,8 @@ class Encoder(PreTrainedModel):
         )
         sequence_output_s_ = outputs_s_[0]
         sequence_output_e_ = outputs_e_[0]
-        query_start = sequence_output_s_[:,:1,:]
-        query_end = sequence_output_e_[:,:1,:]
+        query_start = sequence_output_s_[:,:1,:]  # [CLS]
+        query_end = sequence_output_e_[:,:1,:]  # [CLS]
         return query_start, query_end
 
     def forward(
