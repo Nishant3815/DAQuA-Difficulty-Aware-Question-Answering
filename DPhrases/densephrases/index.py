@@ -176,7 +176,13 @@ class MIPS(object):
         return each
 
     def adjust_sent(self, each):
-        sents = [(X.text, X[0].idx) for X in self.sentencizer(each['context']).sents]
+        """
+        Reduces the context to only the sentence (or sentences) that contain the phrase (answer).
+        Also adjusts the start_pos and end_pos based on this reduction such that:
+            answer = context[start_pos:end_pos+1]
+        """
+
+        sents = [(X.text, X[0].idx) for X in self.sentencizer(each['context']).sents]  # .idx gives the start_pos of the sentence in the context
         sent_idxs = sorted(set(
             [sum(np.array([st[1] for st in sents]) <= each['start_pos']) - 1] +
             [sum(np.array([st[1] for st in sents]) <= each['end_pos']-1) - 1]
@@ -429,6 +435,8 @@ class MIPS(object):
                 da = f'{result["title"]}_{result["start_pos"]}_{result["end_pos"]}'
             elif agg_strat == 'opt2': # for sentence/passage retrieval
                 da = f'{result["context"]}'
+            elif agg_strat == 'opt2a':  # for multi-hop warmup sentence retrieval
+                da = f'{result["context"]}_{result["start_pos"]}_{result["end_pos"]}'
             elif agg_strat == 'opt3': # for document retrieval
                 da = f'{result["title"]}'
             elif agg_strat == 'opt4': # for aggregate with answer and merge titles (for KILT)
