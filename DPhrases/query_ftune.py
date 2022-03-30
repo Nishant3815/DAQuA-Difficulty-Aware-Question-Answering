@@ -1,18 +1,14 @@
-import json
-import argparse
 import torch
 import os
+import sys
 import random
 import numpy as np
-import requests
 import logging
 import math
 import copy
-import string
-import faiss
-
-from time import time
 from tqdm import tqdm
+from IPython import embed
+
 from densephrases.utils.squad_utils import get_question_dataloader
 from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
@@ -26,10 +22,49 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+run_id = str(__import__('calendar').timegm(__import__('time').gmtime()))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def setup_run():
+    # See options in densephrases.options
+    options = Options()
+    options.add_model_options()
+    options.add_index_options()
+    options.add_retrieval_options()
+    options.add_data_options()
+    options.add_qsft_options()
+    args = options.parse()
+
+    # Create output dir
+    if args.output_dir is None:
+        raise ValueError("Missing argument: --output_dir")
+    save_path = os.path.join(args.output_dir, run_id)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+
+    # Setup logging
+    root_logger = logging.getLogger()
+    formatter = logging.Formatter(fmt='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+                                  datefmt='%m/%d/%Y %H:%M:%S')
+    fh = logging.FileHandler(f"{save_path}/log.txt", mode="a", delay=False)
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(formatter)
+    root_logger.addHandler(fh)
+
+    print("\n\n")
+    logger.info(f"Starting with RUN_ID={run_id}")
+    print("\n\n")
+
+    # Seed for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
+    return args, save_path
 
 def is_train_param(name):
     if name.endswith(".embeddings.word_embeddings.weight"):
@@ -39,15 +74,15 @@ def is_train_param(name):
 
 
 def shuffle_data(data):
-    q_ids, questions, answers, titles, final_answers = data
-    qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers))
+    q_ids, questions, answers, titles, final_answers, final_titles = data
+    qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles))
     random.shuffle(qa_pairs)
-    q_ids, questions, answers, titles, final_answers = zip(*qa_pairs)
+    q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs)
     logger.info(f'Shuffling QA pairs')
-    return q_ids, questions, answers, titles, final_answers
+    return q_ids, questions, answers, titles, final_answers, final_titles
 
 
-def train_query_encoder(args, mips=None):
+def train_query_encoder(args, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
@@ -79,8 +114,8 @@ def train_query_encoder(args, mips=None):
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
 
     # Load train and dev data
-    train_qa_pairs = load_qa_pairs(args.train_path, args)
-    dev_qa_pairs = load_qa_pairs(args.train_path, args)
+    train_qa_pairs = load_qa_pairs(args.train_path, args, multihop=True)
+    dev_qa_pairs = load_qa_pairs(args.dev_path, args, multihop=True)
 
     step_per_epoch = math.ceil(len(train_qa_pairs[1]) / args.per_gpu_train_batch_size)
     # Get the total steps and pre-warmup steps
@@ -96,7 +131,8 @@ def train_query_encoder(args, mips=None):
 
     # Train arguments
     args.per_gpu_train_batch_size = int(args.per_gpu_train_batch_size / args.gradient_accumulation_steps)
-    best_acc = -1000.0
+    best_acc = -1000.0 if init_dev_acc is None else init_dev_acc
+    best_epoch = -1
 
     logger.info(f"Starting warmup training")
     # Warm-up the model with a first-hop retrieval objective
@@ -107,7 +143,7 @@ def train_query_encoder(args, mips=None):
         total_accs_k = []
 
         # Load training dataset
-        q_ids, questions, answers, titles, final_answers = shuffle_data(train_qa_pairs)
+        q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs)
 
         # Progress bar
         pbar = tqdm(get_top_phrases(
@@ -116,7 +152,7 @@ def train_query_encoder(args, mips=None):
         )
 
         for step_idx, (q_ids, questions, answers, titles, outs, final_answers, _) in enumerate(pbar):
-            # INFO: outs contains topk phrases for each query
+            # INFO: `outs` contains topk phrases for each query
 
             train_dataloader, _, _ = get_question_dataloader(
                 questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
@@ -144,7 +180,7 @@ def train_query_encoder(args, mips=None):
                     end_vecs=evs_t,
                     targets=tgts_t,
                     p_targets=p_tgts_t,
-                )
+                )  # INFO: `accs` is the accuracy of the top-1 probability prediction being a valid gold target
 
                 # Optimize, get acc and report
                 if loss is not None:
@@ -180,21 +216,30 @@ def train_query_encoder(args, mips=None):
         step_idx += 1
         logger.info(
             f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
-            f"acc@1: {sum(total_accs) / len(total_accs):.3f} | acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
+            f"acc@1: {sum(total_accs) / len(total_accs):.3f} | " +
+            f"acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
         )
 
-        # Evaluation
+        # Dev evaluation
+        print("\n")
+        logger.info("Evaluating on the DEV set")
+        print("\n")
         new_args = copy.deepcopy(args)
         new_args.top_k = 10
         new_args.save_pred = False
         new_args.test_path = args.dev_path
-        dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer)
-        logger.info(f"Develoment set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+        eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True)
+        dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
+        evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = eval_res[1]
+        logger.info(f"Dev set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+        logger.info(f"Dev set (evidence) acc@1: {evid_dev_em:.3f}, f1@1: {evid_dev_f1:.3f}")
 
         # Save best model
+        # TODO: Decide if evaluation should be on phrase or sentence (i.e., dev_em or evid_dev_em)
         if dev_em > best_acc:
             best_acc = dev_em
-            save_path = args.output_dir
+            best_epoch = ep_idx
+            save_path = os.path.join(args.output_dir, run_id)
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
             target_encoder.save_pretrained(save_path)
@@ -205,7 +250,7 @@ def train_query_encoder(args, mips=None):
             pretrained_encoder = copy.deepcopy(target_encoder)
 
     print()
-    logger.info(f"Best model has acc {best_acc:.3f} saved as {save_path}")
+    logger.info(f"Best model with accuracy {best_acc:.3f} saved at {save_path}")
 
     if not args.warmup_only:
         logger.info(f"Starting (full) joint training")
@@ -219,7 +264,7 @@ def train_query_encoder(args, mips=None):
             total_accs_k1 = []
             total_accs_k2 = []
             # Get questions and corresponding answers with other metadata
-            q_ids, questions, answers, titles, full_answers = shuffle_data(train_qa_pairs)
+            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs)
 
             # Perform first hop search
             pbar_hop1 = tqdm(get_top_phrases(
@@ -334,7 +379,8 @@ def train_query_encoder(args, mips=None):
             new_args.top_k = 10
             new_args.save_pred = False
             new_args.test_path = args.dev_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer)
+            # TODO: Need to implement `multihop` in evaluate()
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True)
             logger.info(f"Develoment set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
 
             # Save best model
@@ -511,34 +557,44 @@ def get_top_phrase_step2(mips, q_ids, questions, answers, titles, query_encoder,
     return outs_sec
 
 
-
 if __name__ == '__main__':
-    # See options in densephrases.options
-    options = Options()
-    options.add_model_options()
-    options.add_index_options()
-    options.add_retrieval_options()
-    options.add_data_options()
-    options.add_qsft_options()
-    args = options.parse()
-
-    # Seed for reproducibility
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+    # Setup: Get arguments, init logger, create output dir
+    args, save_path = setup_run()
 
     if args.run_mode == 'train_query':
-        # Train
         mips = load_phrase_index(args)
-        train_query_encoder(args, mips)
 
-        # Eval
-        args.load_dir = args.output_dir
-        logger.info(f"Evaluating {args.load_dir}")
-        args.top_k = 10
-        evaluate(args, mips)
+        init_res = None
+        if not args.skip_init_eval:
+            # Initial eval on dev set
+            logger.info(f"Pre-training: evaluating {args.load_dir} on the DEV set")
+            print()
+            # TODO: Implement `multihop`
+            init_res, _ = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
+                                data_path=args.dev_path, save_path=save_path)
+            init_res = init_res[0]  # dev_em: EM @ 1 on the dev set
+            print("\n\n")
 
+        # Train
+        logger.info(f"Starting training...")
+        print()
+        train_query_encoder(args, mips, init_dev_acc=init_res)
+        print("\n\n")
+
+        if not args.skip_final_eval:
+            # Eval on test set
+            args.load_dir = save_path
+            logger.info(f"Evaluating {args.load_dir} on the TEST set")
+            print()
+            args.top_k = 10
+            evaluate(args, mips, firsthop=True, save_pred=True, save_path=save_path)
+    elif args.run_mode == 'eval':
+        mips = load_phrase_index(args)
+        # Eval on test set
+        logger.info(f"Evaluating {args.load_dir} on the TEST set")
+        print()
+        evaluate(args, mips, firsthop=True, save_pred=True, save_path=save_path)
     else:
         raise NotImplementedError
+
+    print(f"\nOutput directory: {save_path}\n")
