@@ -149,7 +149,7 @@ class Options():
                                  help="model-based filtering threshold.", )
 
     def add_retrieval_options(self):
-        self.parser.add_argument('--run_mode', default='eval')
+        self.parser.add_argument('--run_mode', default='eval', help="eval | train_query")
         self.parser.add_argument('--top_k', type=int, default=10)
         self.parser.add_argument('--nprobe', type=int, default=256)
         self.parser.add_argument('--aggregate', action='store_true', default=False)
@@ -196,6 +196,8 @@ class Options():
         self.parser.add_argument('--warmup_label_strat', default='sent,doc', type=str,
                                  help="label strat={phrase|sent|doc|phrase,doc|sent,doc}")
         self.parser.add_argument('--warmup_agg_strat', type=str, default='opt2a')
+        self.parser.add_argument("--skip_init_eval", action="store_true", help="Skip initial dev set eval")
+        self.parser.add_argument("--skip_final_eval", action="store_true", help="Skip final test set eval")
 
 
     def add_demo_options(self):
