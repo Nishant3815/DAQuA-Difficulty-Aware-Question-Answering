@@ -17,7 +17,8 @@ from time import time
 from tqdm import tqdm
 
 from densephrases.utils.eval_utils import normalize_answer, f1_score, exact_match_score, drqa_exact_match_score, \
-        drqa_regex_match_score, drqa_metric_max_over_ground_truths, drqa_normalize, drqa_substr_match_score
+    drqa_regex_match_score, drqa_metric_max_over_ground_truths, drqa_normalize, drqa_substr_match_score, \
+    drqa_substr_f1_match_score
 from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
 from densephrases.utils.kilt.eval import evaluate as kilt_evaluate
@@ -169,6 +170,15 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     evid_f1_score_topk = 0
     evid_f1_score_top1 = 0
 
+    # Joint phrase+evidence metrics
+    total_phr_substr_evid_f1_topk = 0
+    total_phr_substr_evid_f1_top1 = 0
+
+    # Set the phrase metric text for logging
+    phr_metric = "em"
+    if firsthop:
+        phr_metric = "substr"
+
     for i in range(len(predictions)):
         # For debugging
         if i < 3:
@@ -227,6 +237,23 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
                 evid_f1_score_topk += evid_f1_topk
                 evid_f1_score_top1 += evid_f1_top1
 
+        if firsthop:
+            # Evaluate joint phrase+evidence retrieval
+            phr_substr_evid_f1_topk = max([drqa_metric_max_over_ground_truths(
+                drqa_substr_f1_match_score, {
+                    'pred_substr': predictions[i][k],
+                    'pred_f1': evidences[i][k]
+                }, answers[i]
+            ) for k in range(args.top_k)])
+            phr_substr_evid_f1_top1 = drqa_metric_max_over_ground_truths(
+                drqa_substr_f1_match_score, {
+                    'pred_substr': top1_preds[i],
+                    'pred_f1': top1_evids[i]
+                }, answers[i]
+            )
+            total_phr_substr_evid_f1_topk += phr_substr_evid_f1_topk
+            total_phr_substr_evid_f1_top1 += phr_substr_evid_f1_top1
+
         # Score statistics
         assert len(predictions[i]) <= args.top_k
         pred_out[qids[i]] = {
@@ -235,7 +262,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
             'pred_phrase': predictions[i], 'pred_title': [pt[0] for pt in pred_titles[i]],
             'pred_evidence': evidences[i] if evidences is not None else '',
             'score': scores[i],
-            'em_top1': bool(em_top1), f'em_top{args.top_k}': bool(em_topk),
+            f'{phr_metric}_top1': bool(em_top1), f'{phr_metric}_top{args.top_k}': bool(em_topk),
             'f1_top1': f1_top1, f'f1_top{args.top_k}': f1_topk,
             # 'se_pos': se_positions[i] if se_positions is not None else (-1, -1),
             'rd_topk': rd_topk,
@@ -250,42 +277,61 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
             }
             pred_out[qids[i]].update(evid_pred_out)
 
+            # Add joint metrics
+            joint_pred_out = {
+                'phr_substr_evid_f1_top1': phr_substr_evid_f1_top1,
+                f'phr_substr_evid_f1_top{args.top_k}': phr_substr_evid_f1_topk
+            }
+            pred_out[qids[i]].update(joint_pred_out)
+
     # Aggregate prediction metrics
     total = len(predictions)
     exact_match_top1 = 100.0 * exact_match_top1 / total
     f1_score_top1 = 100.0 * f1_score_top1 / total
-    logger.info({'exact_match_top1': exact_match_top1, 'f1_score_top1': f1_score_top1})
+    logger.info({f'{phr_metric}_top1': exact_match_top1, 'f1_score_top1': f1_score_top1})
     exact_match_topk = 100.0 * exact_match_topk / total
     f1_score_topk = 100.0 * f1_score_topk / total
-    logger.info({f'exact_match_top{args.top_k}': exact_match_topk, f'f1_score_top{args.top_k}': f1_score_topk})
+    logger.info({f'{phr_metric}_top{args.top_k}': exact_match_topk, f'f1_score_top{args.top_k}': f1_score_topk})
     redundant_topk = redundant_topk / total
     logger.info({f'redundancy of top{args.top_k}': redundant_topk})
     if firsthop:
         # Add evidence metrics
         evid_exact_match_top1 = 100.0 * evid_exact_match_top1 / total
         evid_f1_score_top1 = 100.0 * evid_f1_score_top1 / total
-        logger.info({'evid_exact_match_top1': evid_exact_match_top1, 'evid_f1_score_top1': evid_f1_score_top1})
+        logger.info({'evid_em_top1': evid_exact_match_top1, 'evid_f1_score_top1': evid_f1_score_top1})
         evid_exact_match_topk = 100.0 * evid_exact_match_topk / total
         evid_f1_score_topk = 100.0 * evid_f1_score_topk / total
-        logger.info({f'evid_exact_match_top{args.top_k}': evid_exact_match_topk, f'evid_f1_score_top{args.top_k}': evid_f1_score_topk})
+        logger.info(
+            {f'evid_em_top{args.top_k}': evid_exact_match_topk, f'evid_f1_score_top{args.top_k}': evid_f1_score_topk})
+
+        # Add joint metrics
+        total_phr_substr_evid_f1_top1 = 100.0 * total_phr_substr_evid_f1_top1 / total
+        total_phr_substr_evid_f1_topk = 100.0 * total_phr_substr_evid_f1_topk / total
+        logger.info({'phr_substr_evid_f1_top1': total_phr_substr_evid_f1_top1,
+                     f'total_phr_substr_evid_f1_top{args.top_k}': total_phr_substr_evid_f1_topk})
 
     # Store aggregated metrics in a separate file
     agg_pred_out = {
         'total': total,
-        'exact_match_top1': exact_match_top1,
+        f'{phr_metric}_top1': exact_match_top1,
         'f1_score_top1': f1_score_top1,
-        f'exact_match_top{args.top_k}': exact_match_topk,
+        f'{phr_metric}_top{args.top_k}': exact_match_topk,
         f'f1_score_top{args.top_k}': f1_score_topk,
         f'redundancy of top{args.top_k}': redundant_topk,
     }
     if firsthop:
         evid_agg_pred_out = {
-            'evid_exact_match_top1': evid_exact_match_top1,
+            'evid_em_top1': evid_exact_match_top1,
             'evid_f1_score_top1': evid_f1_score_top1,
-            f'evid_exact_match_top{args.top_k}': evid_exact_match_topk,
+            f'evid_em_top{args.top_k}': evid_exact_match_topk,
             f'evid_f1_score_top{args.top_k}': evid_f1_score_topk
         }
         agg_pred_out.update(evid_agg_pred_out)
+        joint_agg_pred_out = {
+            'phr_substr_evid_f1_top1': total_phr_substr_evid_f1_top1,
+            f'total_phr_substr_evid_f1_top{args.top_k}': total_phr_substr_evid_f1_topk
+        }
+        agg_pred_out.update(joint_agg_pred_out)
 
     # Dump predictions
     if save_path is not None:
@@ -322,7 +368,8 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     return_tuple = (exact_match_top1, f1_score_top1, exact_match_topk, f1_score_topk)
     if firsthop:
         evid_return_tuple = (evid_exact_match_top1, evid_f1_score_top1, evid_exact_match_topk, evid_f1_score_topk)
-        return return_tuple, evid_return_tuple
+        joint_return_tuple = (total_phr_substr_evid_f1_top1, total_phr_substr_evid_f1_topk)
+        return return_tuple, evid_return_tuple, joint_return_tuple
     return return_tuple
 
 
