@@ -196,9 +196,14 @@ class Options():
         self.parser.add_argument('--warmup_label_strat', default='sent,doc', type=str,
                                  help="label strat={phrase|sent|doc|phrase,doc|sent,doc}")
         self.parser.add_argument('--warmup_agg_strat', type=str, default='opt2a')
-        self.parser.add_argument("--skip_init_eval", action="store_true", help="Skip initial dev set eval")
-        self.parser.add_argument("--skip_final_eval", action="store_true", help="Skip final test set eval")
-
+        self.parser.add_argument("--skip_init_eval", action="store_true", help="Skip pre-training eval")
+        self.parser.add_argument("--skip_final_eval", action="store_true", help="Skip post-training eval")
+        self.parser.add_argument("--eval_all_splits", action="store_true",
+                                 help="Whether to perform the initial/final evals on all data splits or not")
+        self.parser.add_argument("--evidence_f1_threshold", default=0.7, type=float,
+                                 help="F1 score threshold b/w evidence and gold SUP sentence to pick training targets")
+        self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
+                                 help="Metric to decide best epoch: phrase | evidence | joint")
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')

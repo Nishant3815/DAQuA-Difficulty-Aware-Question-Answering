@@ -13,7 +13,7 @@ from densephrases.utils.squad_utils import get_question_dataloader
 from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
 from densephrases.utils.eval_utils import drqa_exact_match_score, drqa_regex_match_score, \
-    drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_exact_match_score
+    drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_f1_match_score
 from eval_phrase_retrieval import evaluate
 from densephrases import Options
 
@@ -231,26 +231,34 @@ def train_query_encoder(args, mips=None, init_dev_acc=None):
         eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True)
         dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
         evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = eval_res[1]
+        joint_substr_f1, joint_substr_f1k = eval_res[2]
+        # Warm-up dev metric to use for picking the best epoch
+        dev_metrics = {
+            "phrase": dev_em,
+            "evidence": evid_dev_f1,
+            "joint": joint_substr_f1
+        }
         logger.info(f"Dev set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
         logger.info(f"Dev set (evidence) acc@1: {evid_dev_em:.3f}, f1@1: {evid_dev_f1:.3f}")
+        logger.info(f"Dev set (joint) acc@1: {joint_substr_f1:.3f}")
 
         # Save best model
         # TODO: Decide if evaluation should be on phrase or sentence (i.e., dev_em or evid_dev_em)
-        if dev_em > best_acc:
-            best_acc = dev_em
+        if dev_metrics[args.warmup_dev_metric] > best_acc:
+            best_acc = dev_metrics[args.warmup_dev_metric]
             best_epoch = ep_idx
             save_path = os.path.join(args.output_dir, run_id)
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
             target_encoder.save_pretrained(save_path)
-            logger.info(f"Saved best model with acc {best_acc:.3f} into {save_path}")
+            logger.info(f"Saved best model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
 
-        if (ep_idx + 1) % 1 == 0:
-            logger.info('Updating pretrained encoder')
-            pretrained_encoder = copy.deepcopy(target_encoder)
+        # if (ep_idx + 1) % 1 == 0:  # TODO: Double-check if this is required
+        logger.info('Updating pretrained encoder')
+        pretrained_encoder = copy.deepcopy(target_encoder)
 
     print()
-    logger.info(f"Best model with accuracy {best_acc:.3f} saved at {save_path}")
+    logger.info(f"Best model (epoch {best_epoch}) with accuracy {best_acc:.3f} saved at {save_path}")
 
     if not args.warmup_only:
         logger.info(f"Starting (full) joint training")
@@ -489,8 +497,6 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
     targets = [[None for phrase in phrase_group] for phrase_group in phrase_groups]
     p_targets = [[None for phrase in phrase_group] for phrase_group in phrase_groups]
 
-    # TODO: implement dynamic label_strategy based on the task name (label_strat = dynamic)
-
     # Annotate for L_phrase
     if 'phrase' in label_strat.split(','):
         match_fns = [
@@ -498,28 +504,33 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
             q_ids
         ]
         targets = [
-            [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
+            [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set)
+             for phrase in phrase_group]  # phrase_group is the top-k predictions
             for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
         ]
         targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
 
     # Annotate for L_sent (added for multi-hop warmup)
-    # Checking if the predicted phrase is in the gold annotated sentences or not
+    # Checking if the predicted phrase is a substring of the gold annotated sentences or not
     if 'sent' in label_strat.split(','):
-        match_fns = [drqa_substr_match_score for q_id in q_ids]
+        match_fns = [drqa_substr_match_score for _ in q_ids]
         targets = [
-            [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
+            [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set)
+             for phrase in phrase_group]  # phrase_group is the top-k predictions
             for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
         ]
         targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
 
+    # Checking if the predicted phrase is a substr of the gold annotated sentence AND
+    # if the token F1 score of the predicted evidence with the gold annotated sentence is >= a specified threshold
     if 'sent2' in label_strat.split(','):
-        match_fns = [drqa_substr_exact_match_score for q_id in q_ids]
+        match_fns = [drqa_substr_f1_match_score for _ in q_ids]
         targets = [
             [drqa_metric_max_over_ground_truths(match_fn, {
-                'substr': phrase['answer'],
-                'exact': phrase['context']
-            }, answer_set, substr_exact=True) for phrase in phrase_group]  # phrase_group is the top-k predictions
+                'pred_substr': phrase['answer'],
+                'pred_f1': phrase['context'],
+                'f1_threshold': args.evidence_f1_threshold,
+            }, answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
             for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
         ]
         targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
@@ -533,6 +544,7 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         p_targets = [[ii if val else None for ii, val in enumerate(target)] for target in p_targets]
 
     return start_vecs, end_vecs, targets, p_targets
+
 
 def get_top_phrase_step2(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers):
     # Yield can't be used with the second updated queries and we need outs_sec from the updated queries
@@ -561,33 +573,39 @@ if __name__ == '__main__':
     # Setup: Get arguments, init logger, create output dir
     args, save_path = setup_run()
 
+    paths_to_eval = {'train': args.train_path, 'dev': args.dev_path, 'test': args.test_path}
     if args.run_mode == 'train_query':
         mips = load_phrase_index(args)
-
-        init_res = None
+        dev_init_em = None
         if not args.skip_init_eval:
-            # Initial eval on dev set
-            logger.info(f"Pre-training: evaluating {args.load_dir} on the DEV set")
-            print()
-            # TODO: Implement `multihop`
-            init_res, _ = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
-                                data_path=args.dev_path, save_path=save_path)
-            init_res = init_res[0]  # dev_em: EM @ 1 on the dev set
+            # Initial eval
+            paths = paths_to_eval if args.eval_all_splits else {'dev': paths_to_eval['dev']}
+            for split in paths:
+                logger.info(f"Pre-training: Evaluating {args.load_dir} on the {split.upper()} set")
+                print()
+                # TODO: Implement `multihop`
+                res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
+                               data_path=paths_to_eval[split], save_path=save_path)
+                if split == 'dev':
+                    dev_init_em = res[2][0]  # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
+                    # TODO: Currently hard-coded to the joint metric; should change with args.warmup_dev_metric
             print("\n\n")
 
         # Train
         logger.info(f"Starting training...")
         print()
-        train_query_encoder(args, mips, init_dev_acc=init_res)
+        train_query_encoder(args, mips, init_dev_acc=dev_init_em)
         print("\n\n")
 
         if not args.skip_final_eval:
             # Eval on test set
             args.load_dir = save_path
-            logger.info(f"Evaluating {args.load_dir} on the TEST set")
             print()
-            args.top_k = 10
-            evaluate(args, mips, firsthop=True, save_pred=True, save_path=save_path)
+            # args.top_k = 10
+            paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
+            for split in paths_to_eval:
+                logger.info(f"Final: Evaluating {args.load_dir} on the {split.upper()} set")
+                evaluate(args, mips, data_path=paths_to_eval[split], firsthop=True, save_pred=True, save_path=save_path)
     elif args.run_mode == 'eval':
         mips = load_phrase_index(args)
         # Eval on test set

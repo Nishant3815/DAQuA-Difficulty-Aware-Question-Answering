@@ -410,6 +410,7 @@ class Encoder(PreTrainedModel):
         if not all([len(t) == 0 for t in p_targets]):
             p_start_logits = start_logits.clone()
             for b_idx, p_start_logit in enumerate(p_start_logits):
+                # INFO: Seems to be for preventing double-counting; TODO: Could it make sense to remove?
                 p_start_logits[b_idx][targets[b_idx].long()] = -1e9
             p_start_loss = [
                 -torch.log(softmax(lg, -1)[tg.long()].sum().clamp(MIN_PROB, 1)) for lg, tg in zip(p_start_logits, p_targets)

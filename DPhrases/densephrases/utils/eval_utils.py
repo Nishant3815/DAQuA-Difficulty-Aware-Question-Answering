@@ -75,6 +75,18 @@ def drqa_substr_exact_match_score(pred_substr, pred_exact, ground_truth):
     return drqa_substr_match_score(pred_substr, ground_truth) and drqa_exact_match_score(pred_exact, ground_truth)
 
 
+def drqa_substr_f1_match_score(pred_substr, pred_f1, ground_truth, f1_threshold=None):
+    """
+    Check if pred_substr is a (soft) substring match with the ground truth
+    AND
+    if the token (soft) f1 score of the pred_f1 with the ground truth is at least as high as the threshold
+    """
+    if f1_threshold is None:
+        # Return the f1 score if there is a substr match; else return 0
+        return drqa_substr_match_score(pred_substr, ground_truth) * f1_score(pred_f1, ground_truth)[0]
+    return drqa_substr_match_score(pred_substr, ground_truth) and (f1_score(pred_f1, ground_truth)[0] >= f1_threshold)
+
+
 def drqa_regex_match_score(prediction, pattern):
     """Check if the prediction matches the given regular expression."""
     try:
@@ -89,16 +101,16 @@ def drqa_regex_match_score(prediction, pattern):
     return compiled.match(prediction) is not None
 
 
-def drqa_metric_max_over_ground_truths(metric_fn, prediction, ground_truths, substr_exact=False):
+def drqa_metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     """Given a prediction and multiple valid answers, return the score of
     the best prediction-answer_n pair given a metric function.
     """
     scores_for_ground_truths = []
     for ground_truth in ground_truths:
-        if not substr_exact:
+        if not type(prediction) is dict:
             score = metric_fn(prediction, ground_truth)
         else:
-            score = metric_fn(prediction['substr'], prediction['exact'], ground_truth)
+            score = metric_fn(**prediction, ground_truth=ground_truth)
         scores_for_ground_truths.append(score)
     return max(scores_for_ground_truths)
 
