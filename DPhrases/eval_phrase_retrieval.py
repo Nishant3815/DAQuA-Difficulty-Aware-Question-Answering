@@ -74,37 +74,99 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         mips = load_phrase_index(args)
 
     # Search
-    step = args.eval_batch_size
-    logger.info(f'Aggregation strategy used: {agg_strat}')
-    predictions = []
-    evidences = []
-    pred_titles = []
-    scores = []
-    se_poss = []
-    for q_idx in tqdm(range(0, len(questions), step)):
-        result = mips.search(
-            query_vec[q_idx:q_idx+step],
-            q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
-            top_k=args.top_k, max_answer_length=args.max_answer_length,
-            aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent
-        )
-        prediction = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
-        evidence = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
-        title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in result]
-        score = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in result]
-        se_pos = [[(ret['start_pos'], ret['end_pos']) for ret in out][:args.top_k] if len(out) > 0 else [(0,0)] for out in result]
-        predictions += prediction
-        evidences += evidence
-        pred_titles += title
-        scores += score
-        se_poss += se_pos
+    if firsthop:
+        # Evaluation only for first hop settings 
+        step = args.eval_batch_size
+        logger.info(f'Aggregation strategy used: {agg_strat}')
+        predictions = []
+        evidences = []
+        pred_titles = []
+        scores = []
+        se_poss = []
+        for q_idx in tqdm(range(0, len(questions), step)):
+            result = mips.search(
+                query_vec[q_idx:q_idx+step],
+                q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
+                top_k=args.top_k, max_answer_length=args.max_answer_length,
+                aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent
+            )
+            prediction = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
+            evidence = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
+            title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in result]
+            score = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in result]
+            se_pos = [[(ret['start_pos'], ret['end_pos']) for ret in out][:args.top_k] if len(out) > 0 else [(0,0)] for out in result]
+            predictions += prediction
+            evidences += evidence
+            pred_titles += title
+            scores += score
+            se_poss += se_pos
 
-    # logger.info(f"Avg. {sum(mips.num_docs_list)/len(mips.num_docs_list):.2f} number of docs per query")
-    eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
-    return eval_fn(predictions, qids, questions, answers, titles, args, evidences,
-                   scores, pred_titles, se_positions=se_poss, firsthop=firsthop, multihop=multihop,
-                   save_pred=save_pred, pred_fname_suffix=pred_fname_suffix, data_path=data_path,
-                   save_path=save_path)
+        # logger.info(f"Avg. {sum(mips.num_docs_list)/len(mips.num_docs_list):.2f} number of docs per query")
+        # Check multihop flag value below
+        eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
+        return eval_fn(predictions, qids, questions, answers, titles, args, evidences,
+                    scores, pred_titles, se_positions=se_poss, firsthop=firsthop, multihop=False,
+                    save_pred=save_pred, pred_fname_suffix=pred_fname_suffix, data_path=data_path,
+                    save_path=save_path)
+    elif multihop:
+        # Evaluation for multihop settings
+        step = args.eval_batch_size
+        logger.info('Evaluating multihop settings')
+        logger.info(f'Aggregation strategy used: {agg_strat}')
+
+        predictions = []
+        pred_titles = []
+        scores      = []
+        se_poss     = [] # NR: Not required, Check with Dhruv, why added to the function for evaluation
+        evidences   = [] # NR: Not required; pass a blank list (Check again)
+
+        # Run multihop case
+        for q_idx in tqdm(range(0, len(questions), step)):
+
+            fhop_result = mips.search(
+                query_vec[q_idx:q_idx+step],
+                q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
+                top_k=args.top_k, max_answer_length=args.max_answer_length,
+                aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent) # Check return_sent param 
+
+            fhop_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in fhop_result]
+            # fhop_title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in fhop_result]
+            fhop_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in fhop_result]
+
+            # Pad predictions and scores to have exact "k" values
+            fhop_prediction = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in fhop_pred_unpad]
+            fhop_score = [sub_li.extend([1e-10]*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in fhop_score_unpad]
+
+            for i, fh_ques , fh_pred, fh_score in enumerate(zip(questions[q_idx:q_idx+step], fhop_prediction, fhop_score)):
+
+                upd_queries   = [fh_ques + " "+ pred_phr for pred_phr in fh_pred]
+                upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer)
+
+                final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe, 
+                    top_k=args.top_k, max_answer_length=args.max_answer_length, 
+                    aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent) #Check return_sent param
+                
+                final_pred_unp = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in final_result]
+                final_titl_unp = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in final_result]
+                final_scor_unp = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in final_result]
+
+                # Pad answers, titles and scores if length of sublist is less than top_k
+                final_prediction = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_pred_unp]
+                final_title = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_titl_unp]
+                final_score = [sub_li.extend([1e-10]*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_scor_unp]
+
+                # Prune final-answers, each query had top k best append and for topk best append, we find another topk (total = top_k*top_k)
+                final_chain_ans, final_chain_title, final_chain_scores = extract_top_pred_chains(fh_score, final_prediction, final_score, final_title, args)
+                predictions += final_chain_ans
+                pred_titles += final_chain_title
+                scores += final_chain_scores
+
+
+        eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
+        return eval_fn(predictions, qids, questions, final_answers, final_titles, args, evidences,
+                    scores, pred_titles, se_positions=se_poss, firsthop=False, multihop=True,
+                    save_pred=save_pred, pred_fname_suffix=pred_fname_suffix, data_path=data_path,
+                    save_path=save_path)
 
 
 def evaluate_results(predictions, qids, questions, answers, titles, args, evidences,
@@ -534,6 +596,36 @@ def evaluate_results_psg(pred_path, args):
     command = f'python scripts/postprocess/recall.py --k_values 1,5,20,100 --results_file {out_file} --ans_fn string'
     subprocess.run(command.split(' '))
 
+def extract_top_pred_chains(fh_score, final_prediction, final_score, final_title, args):
+    """
+    For a given question, takes in first hop scores (as a list), second_hop scores as list of list, 
+    second hop final answer and title array. Output is list of topk phrases, list of scores and list of titles 
+    """
+    # Flatten the list
+    final_pred_flat = [ans for sub_li in final_prediction for ans in sub_li]
+    final_score_flat = [score_val for sub_li in final_score for score_val in sub_li]
+    final_title_flat = [title_text for sub_li in final_title for title_text in sub_li]
+
+    # Convert to numpy arrays for faster computations
+    final_score_arr = np.array(final_score_flat).reshape((-1, args.top_k, args.top_k))
+    final_pred_arr  = np.array(final_pred_flat).reshape((-1, args.top_k, args.top_k))
+    final_title_arr  = np.array(final_title_flat).reshape((-1, args.top_k, args.top_k))
+    score_fhop = [fh_score]
+
+    # Get overall score by multiplication of scores
+    path_scores = np.expand_dims(score_fhop, axis=2)*final_score_arr
+    search_scores = np.squeeze(path_scores)
+    # Get 2D index based on ranking
+    ranked_pairs = np.vstack(np.unravel_index(np.argsort(search_scores.ravel())[::-1],(args.top_k, args.top_k))).transpose()
+    start_idx = [item[0] for item in ranked_pairs[:args.top_k]]
+    end_idx   = [item[1] for item in ranked_pairs[:args.top_k]]
+
+    # Get final top-k answers, titles and phrases
+    chain_top_ans = np.squeeze(final_pred_arr)[start_idx, end_idx]
+    chain_top_titles = np.squeeze(final_title_arr)[start_idx, end_idx]
+    chain_top_score  = np.squeeze(path_scores)[start_idx, end_idx]
+
+    return list(chain_top_ans), list(chain_top_titles), list(chain_top_score)
 
 if __name__ == '__main__':
     # See options in densephrases.options
@@ -582,3 +674,5 @@ if __name__ == '__main__':
     
     else:
         raise NotImplementedError
+
+

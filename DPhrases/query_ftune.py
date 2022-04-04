@@ -257,7 +257,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 target_encoder.save_pretrained(save_path)
                 logger.info(f"Saved best model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
 
-            # if (ep_idx + 1) % 1 == 0:  # TODO: Double-check if this is required
+            # TODO: Eliminate pretrained_encoder and use only target_encoders as suggested by authors
             logger.info('Updating pretrained encoder')
             pretrained_encoder = copy.deepcopy(target_encoder)
         print()
@@ -582,8 +582,13 @@ if __name__ == '__main__':
                 res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
                                data_path=paths_to_eval[split], save_path=save_path)
                 if split == 'dev':
-                    dev_init_em = res[2][0]  # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
-                    # TODO: Currently hard-coded to the joint metric; should change with args.warmup_dev_metric
+                    if args.warmup_dev_metric=='joint':
+                        dev_init_em = res[2][0] # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
+                    elif args.warmup_dev_metric=='evidence':
+                        dev_init_em = res[1][1] # evid_f1_score_top1: evidence metric f1 @1 on the dev set
+                    else:
+                        dev_init_em = res[0][1] # f1_score_top1
+                    # TODO: Currently hard-coded to the joint metric; should change with args.warmup_dev_metric (Done)
             print("\n\n")
 
         # Train
