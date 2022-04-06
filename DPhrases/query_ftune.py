@@ -117,7 +117,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
-    target_encoder, tokenizer, _ = load_encoder(device, args)
+    target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
 
     # Train a copy of it
     # logger.info("Copying target encoder")
@@ -257,7 +257,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 target_encoder.save_pretrained(save_path)
                 logger.info(f"Saved best model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
 
-            # TODO: Eliminate pretrained_encoder and use only target_encoders as suggested by authors
+            # TO DO: Eliminate pretrained_encoder and use only target_encoders as suggested by authors
             # logger.info('Updating pretrained encoder')
             # pretrained_encoder = copy.deepcopy(target_encoder)
         print()
@@ -282,8 +282,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
         # Train arguments
         args.per_gpu_train_batch_size = int(args.per_gpu_train_batch_size / args.gradient_accumulation_steps)
-        # TODO: Run dev eval to compute a pre-trained best_acc
-        best_acc = -1000.0
+        # TO DO: Run dev eval to compute a pre-trained best_acc (Done)
+        best_acc = -1000.0 if init_dev_acc is None else init_dev_acc
         best_epoch = -1
 
         # Run joint training for SUP sentence retrieval + answer phrase retrieval
@@ -567,6 +567,7 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
 if __name__ == '__main__':
     # Setup: Get arguments, init logger, create output dir
     args, save_path = setup_run()
+    device ='cuda' if args.cuda else 'cpu'
 
     paths_to_eval = {'train': args.train_path, 'dev': args.dev_path, 'test': args.test_path}
     if args.run_mode == 'train_query':
@@ -578,18 +579,28 @@ if __name__ == '__main__':
             for split in paths:
                 logger.info(f"Pre-training: Evaluating {args.load_dir} on the {split.upper()} set")
                 print()
-                # TODO: Implement `multihop`
-                res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
-                               data_path=paths_to_eval[split], save_path=save_path)
-                if split == 'dev':
-                    if args.warmup_dev_metric=='joint':
-                        dev_init_em = res[2][0] # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
-                    elif args.warmup_dev_metric=='evidence':
-                        dev_init_em = res[1][1] # evid_f1_score_top1: evidence metric f1 @1 on the dev set
-                    else:
-                        dev_init_em = res[0][1] # f1_score_top1
-                    # TODO: Currently hard-coded to the joint metric; should change with args.warmup_dev_metric (Done)
-            print("\n\n")
+                # TODO: Implement `multihop` (Done: Verify implementation)
+                if not args.skip_warmup:
+                    res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain",
+                                data_path=paths_to_eval[split], save_path=save_path)
+                    if split == 'dev':
+                        if args.warmup_dev_metric=='joint':
+                            dev_init_em = res[2][0] # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
+                        elif args.warmup_dev_metric=='evidence':
+                            dev_init_em = res[1][1] # evid_f1_score_top1: evidence metric f1 @1 on the dev set
+                        else:
+                            dev_init_em = res[0][1] # f1_score_top1
+                        # TODO: Currently hard-coded to the joint metric; should change with args.warmup_dev_metric (Done)
+                else:
+                    # NR: Check with Dhruv, the use of q_idx, not sure why it is in function ?
+                    # Load the query encoder after the warmup stage
+                    target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+                    res = evaluate(args, mips, query_encoder=target_encoder, tokenizer=tokenizer, multihop=True, ave_pred=True, pred_fname_suffix="pretrain",
+                                data_path=paths_to_eval[split], save_path=save_path)
+                    if split== 'dev':
+                        dev_init_em = res[1] # f1_score_top1
+
+                print("\n\n")            
 
         # Train
         logger.info(f"Starting training...")
