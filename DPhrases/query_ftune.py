@@ -117,11 +117,11 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
-    pretrained_encoder, tokenizer, _ = load_encoder(device, args)
+    target_encoder, tokenizer, _ = load_encoder(device, args)
 
     # Train a copy of it
-    logger.info("Copying target encoder")
-    target_encoder = copy.deepcopy(pretrained_encoder)
+    # logger.info("Copying target encoder")
+    # target_encoder = copy.deepcopy(pretrained_encoder)
 
     # MIPS
     if mips is None:
@@ -155,7 +155,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
             )
 
@@ -258,8 +258,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 logger.info(f"Saved best model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
 
             # TODO: Eliminate pretrained_encoder and use only target_encoders as suggested by authors
-            logger.info('Updating pretrained encoder')
-            pretrained_encoder = copy.deepcopy(target_encoder)
+            # logger.info('Updating pretrained encoder')
+            # pretrained_encoder = copy.deepcopy(target_encoder)
         print()
         logger.info(f"Best model (epoch {best_epoch}) with accuracy {best_acc:.3f} saved at {save_path}")
 
@@ -270,10 +270,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             # Load best warmed-up model and initialize optimizer/scheduler
             logger.info("Loading best warmed-up encoder")
             args.load_dir = save_path
-            pretrained_encoder, tokenizer, _ = load_encoder(device, args)
+            target_encoder, tokenizer, _ = load_encoder(device, args)
             # Train a copy of it
-            logger.info("Copying target encoder")
-            target_encoder = copy.deepcopy(pretrained_encoder)
+            # logger.info("Copying target encoder")
+            # target_encoder = copy.deepcopy(pretrained_encoder)
 
         # Initialize optimizer & scheduler
         optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
@@ -295,7 +295,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, questions, answers, titles, pretrained_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
             )
             for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
@@ -354,7 +354,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             list(zip(*upd_queries))
                         upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
                         top_phrases_upd = get_top_phrases(
-                            mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, pretrained_encoder,
+                            mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, target_encoder,
                             tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles,
                             agg_strat=args.agg_strat
                         )

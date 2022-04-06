@@ -56,7 +56,7 @@ def backward_compat(model_dict):
     return new_model_dict
 
 
-def load_encoder(device, args, phrase_only=False):
+def load_encoder(device, args, phrase_only=False, query_only=False):
     # Configure paths for DnesePhrases
     args.model_type = args.model_type.lower()
     config = AutoConfig.from_pretrained(
@@ -112,6 +112,14 @@ def load_encoder(device, args, phrase_only=False):
             del model.query_start_encoder
             del model.query_end_encoder
         logger.info("Load only phrase encoders for embedding phrases")
+    
+    if query_only:
+        if hasattr(model, "module"):
+            del model.module.phrase_encoder
+        else:
+            del model.phrase_encoder
+        logger.info("Load only query encoders for embedding queries")
+
 
     model.to(device)
     logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
