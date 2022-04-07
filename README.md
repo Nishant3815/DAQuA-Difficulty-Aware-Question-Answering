@@ -4,8 +4,8 @@
   - **DensePhrases:**
     ```bash
     cd DPhrases/
-    ln -s /scratch/nishantraj_umass_edu/dense_phrases/outputs ./outputs
-    ln -s /scratch/nishantraj_umass_edu/dense_phrases/densephrases-data ./densephrases-data
+    ln -s /home/dagarwal_umass_edu/work/daqua-696ds/DPhrases/outputs ./outputs
+    ln -s /home/dagarwal_umass_edu/work/daqua-696ds/DPhrases/densephrases-data ./densephrases-data
     ```
   - **MDR:**
     ```bash
