@@ -204,7 +204,15 @@ class Options():
         self.parser.add_argument("--evidence_f1_threshold", default=0.7, type=float,
                                  help="F1 score threshold b/w evidence and gold SUP sentence to pick training targets")
         self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
-                                 help="Metric to decide best epoch: phrase | evidence | joint")
+                                 help="Metric to decide best epoch for warmup training: phrase | evidence | joint")
+        self.parser.add_argument('--dev_metric', default='phrase', type=str,
+                                 help="Metric to decide best epoch for joint training: phrase | <TBD>")
+        self.parser.add_argument("--chain_score_op", default='sum', type=str,
+                                 help="Aggregation operator to use for combining scores from different hops: sum | prod")
+        self.parser.add_argument("--joint_loss_lambda", default=0.4, type=float,
+                                 help="Weight to assign to first-hop loss; (1-lambda) will be assigned to second-hop")
+        self.parser.add_argument("--skip_warmup_dev_eval", action="store_true", help="Skip dev eval for warmup training")
+
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
