@@ -1,17 +1,13 @@
 import json
-import argparse
 import torch
 import os
 import random
 import numpy as np
-import requests
 import logging
-import math
 import copy
 import string
-import faiss
-import csv
 import subprocess
+from IPython import embed
 
 from time import time
 from tqdm import tqdm
@@ -31,13 +27,14 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
 logger = logging.getLogger(__name__)
 
 
-def embed_all_query(questions, args, query_encoder, tokenizer, batch_size=64):
+def embed_all_query(questions, args, query_encoder, tokenizer, batch_size=64, silent=False):
     query2vec = get_query2vec(
         query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size
     )
 
     all_outs = []
-    for q_idx in tqdm(range(0, len(questions), batch_size)):
+    iterator = range(0, len(questions), batch_size)
+    for q_idx in (iterator if silent else tqdm(iterator)):
         outs = query2vec(questions[q_idx:q_idx+batch_size])
         all_outs += outs
     start = np.concatenate([out[0] for out in all_outs], 0)
@@ -47,21 +44,34 @@ def embed_all_query(questions, args, query_encoder, tokenizer, batch_size=64):
     return query_vec
 
 
+def to_arr(arr, d):
+    """
+    Add dim to last index
+    """
+    if d == 2:
+        if type(arr[0]) is list:
+            return arr
+        return list(map(lambda x: [x], arr))
+    if d == 3:
+        if type(arr[0][0]) is list:
+            return arr
+        return list(map(lambda x: [[xi] for xi in x], arr))
+    raise ValueError(f"Invalid argument {d} for d")
+
+
 def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, firsthop=False, multihop=False,
              save_pred=None, pred_fname_suffix="", data_path=None, agg_strat=None, save_path=None):
     # Set path to load evaluation data
     data_path = data_path if data_path is not None else args.test_path
-    # Set aggregation strategy
-    agg_strat = agg_strat if agg_strat is not None else 'opt2a' if firsthop else args.agg_strat
-    # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
-    return_sent = agg_strat == "opt2a"
 
     # Load dataset and encode queries
     if firsthop or multihop:
-        qids, questions, answers, titles, final_answers, final_titles = load_qa_pairs(data_path, args, q_idx,
-                                                                                      multihop=True)
+        # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
+        # gold_answers, gold_titles -> second-hop answer phrases and titles
+        qids, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx,
+                                                                                                 multihop=True)
     else:
-        qids, questions, answers, titles = load_qa_pairs(data_path, args, q_idx)
+        qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
 
     if query_encoder is None:
         logger.info(f'Query encoder will be loaded from {args.load_dir}')
@@ -72,17 +82,23 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     # Load MIPS
     if mips is None:
         mips = load_phrase_index(args)
+    step = args.eval_batch_size
 
-    # Search
-    if firsthop:
-        # Evaluation only for first hop settings 
-        step = args.eval_batch_size
+    # Evaluation for first-hop or no-hop scenario
+    if not multihop:
+        if firsthop:
+            gold_answers = gold_evids
+            gold_titles = gold_evid_titles
+        # Set aggregation strategy
+        agg_strat = agg_strat if agg_strat is not None else 'opt2a' if firsthop else args.agg_strat
+        # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
+        return_sent = agg_strat == "opt2a"
         logger.info(f'Aggregation strategy used: {agg_strat}')
+
         predictions = []
-        evidences = []
+        pred_evids = []
         pred_titles = []
         scores = []
-        se_poss = []
         for q_idx in tqdm(range(0, len(questions), step)):
             result = mips.search(
                 query_vec[q_idx:q_idx+step],
@@ -94,87 +110,115 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             evidence = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
             title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in result]
             score = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in result]
-            se_pos = [[(ret['start_pos'], ret['end_pos']) for ret in out][:args.top_k] if len(out) > 0 else [(0,0)] for out in result]
+            # se_pos = [[(ret['start_pos'], ret['end_pos']) for ret in out][:args.top_k] if len(out) > 0 else [(0,0)] for out in result]
             predictions += prediction
-            evidences += evidence
+            pred_evids += evidence
             pred_titles += title
             scores += score
-            se_poss += se_pos
 
         # logger.info(f"Avg. {sum(mips.num_docs_list)/len(mips.num_docs_list):.2f} number of docs per query")
         # Check multihop flag value below
         eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
-        return eval_fn(predictions, qids, questions, answers, titles, args, evidences,
-                    scores, pred_titles, se_positions=se_poss, firsthop=firsthop, multihop=False,
-                    save_pred=save_pred, pred_fname_suffix=pred_fname_suffix, data_path=data_path,
-                    save_path=save_path)
-    elif multihop:
-        # Evaluation for multihop settings
-        step = args.eval_batch_size
-        logger.info('Evaluating multihop settings')
-        logger.info(f'Aggregation strategy used: {agg_strat}')
+        return eval_fn(predictions, qids, questions, gold_answers, gold_titles, args, pred_evids, scores,
+                       pred_titles, firsthop=firsthop, save_pred=save_pred, pred_fname_suffix=pred_fname_suffix,
+                       data_path=data_path, save_path=save_path)
 
-        predictions = []
-        pred_titles = []
-        scores      = []
-        se_poss     = [] # NR: Not required, Check with Dhruv, why added to the function for evaluation
-        evidences   = [] # NR: Not required; pass a blank list (Check again)
+    # Evaluation for multi-hop scenario
 
-        # Run multihop case
-        for q_idx in tqdm(range(0, len(questions), step)):
+    # Set aggregation strategies for both hops
+    fhop_agg_strat = (agg_strat[0] if agg_strat is list else agg_strat) \
+        if agg_strat is not None else args.warmup_agg_strat
+    agg_strat = (agg_strat[1] if agg_strat is list else agg_strat) \
+        if agg_strat is not None else args.agg_strat
+    # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
+    fhop_return_sent = fhop_agg_strat == "opt2a"
+    return_sent = agg_strat == "opt2a"
+    logger.info(f'Aggregation strategy used: {fhop_agg_strat}, {agg_strat}')
 
-            fhop_result = mips.search(
-                query_vec[q_idx:q_idx+step],
-                q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
-                top_k=args.top_k, max_answer_length=args.max_answer_length,
-                aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent) # Check return_sent param 
+    scores = []
+    predictions = []
+    pred_titles = []
+    pred_evids = []
+    pred_chains = []
 
-            fhop_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in fhop_result]
-            # fhop_title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in fhop_result]
-            fhop_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in fhop_result]
+    for q_idx in tqdm(range(0, len(questions), step)):
+        fhop_result = mips.search(
+            query_vec[q_idx:q_idx+step],
+            q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
+            top_k=args.top_k, max_answer_length=args.max_answer_length,
+            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True)
 
-            # Pad predictions and scores to have exact "k" values
-            fhop_prediction = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in fhop_pred_unpad]
-            fhop_score = [sub_li.extend([1e-10]*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in fhop_score_unpad]
+        fhop_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_evid_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_title_unpad = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
 
-            for i, fh_ques , fh_pred, fh_score in enumerate(zip(questions[q_idx:q_idx+step], fhop_prediction, fhop_score)):
+        for i, (fh_ques, fh_preds, fh_scores, fh_titles, fh_evids) in enumerate(
+                zip(questions[q_idx:q_idx + step], fhop_pred_unpad, fhop_score_unpad, fhop_title_unpad,
+                    fhop_evid_unpad)):
+            if len(fh_preds) == 0:
+                # If there are no first-hop predictions, then store a dummy prediction
+                predictions.append(['']*args.top_k)
+                pred_titles.append(['']*args.top_k)
+                scores.append([1e-10]*args.top_k)
+                pred_evids.append(['']*args.top_k)
+                pred_chains.append([['', '']]*args.top_k)
+                continue
 
-                upd_queries   = [fh_ques + " "+ pred_phr for pred_phr in fh_pred]
-                upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer)
+            upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
+            upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
 
-                final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe, 
-                    top_k=args.top_k, max_answer_length=args.max_answer_length, 
-                    aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent) #Check return_sent param
-                
-                final_pred_unp = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in final_result]
-                final_titl_unp = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in final_result]
-                final_scor_unp = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in final_result]
+            final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe,
+                                       top_k=args.top_k, max_answer_length=args.max_answer_length,
+                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True)
 
-                # Pad answers, titles and scores if length of sublist is less than top_k
-                final_prediction = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_pred_unp]
-                final_title = [sub_li.extend(['']*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_titl_unp]
-                final_score = [sub_li.extend([1e-10]*(args.top_k-len(sub_li))) if len(sub_li)!= args.top_k else sub_li for sub_li in final_scor_unp]
+            final_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+                                final_result]
+            final_evid_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+                                final_result]
+            final_title_unpad = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+                                 final_result]
+            final_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+                                 final_result]
 
-                # Prune final-answers, each query had top k best append and for topk best append, we find another topk (total = top_k*top_k)
-                final_chain_ans, final_chain_title, final_chain_scores = extract_top_pred_chains(fh_score, final_prediction, final_score, final_title, args)
-                predictions += final_chain_ans
-                pred_titles += final_chain_title
-                scores += final_chain_scores
+            # Pad answers, titles and scores if length of sublist is less than top_k
+            final_predictions = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else
+                                sub_li for sub_li in final_pred_unpad]
+            final_evids = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li for
+                           sub_li in final_evid_unpad]
+            final_titles = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li for
+                           sub_li in final_title_unpad]
+            final_scores = [sub_li.extend([1e-10] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li
+                           for sub_li in final_score_unpad]
+
+            # Prune final-answers:
+            #   Each query had top-k best append and for topk best append, we find another topk (total = top_k*top_k)
+            fh_data, final_data = (fh_preds, fh_scores, fh_titles, fh_evids), \
+                                  (final_predictions, final_scores, final_titles, final_evids)
+            topk_final_preds, topk_chain_scores, topk_final_titles, \
+            topk_final_evids, topk_chains = extract_top_pred_chains(fh_data, final_data, args)
+            predictions.append(topk_final_preds)
+            pred_titles.append(topk_final_titles)
+            scores.append(topk_chain_scores)
+            pred_evids.append(topk_final_evids)
+            # topk_chains is a tuple of length 3
+            # Each element contains k (first-hop,second-hop) tuples of predicted phrases, titles, and evidences, resp.
+            pred_chains.append(topk_chains)
+
+    eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
+
+    return eval_fn(predictions, qids, questions, to_arr(gold_answers, d=2), to_arr(gold_titles, d=2), args, pred_evids,
+                   scores, to_arr(pred_titles, d=3), multihop=True, save_pred=save_pred,
+                   pred_fname_suffix=pred_fname_suffix, data_path=data_path, save_path=save_path, chains=pred_chains)
 
 
-        eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
-        return eval_fn(predictions, qids, questions, final_answers, final_titles, args, evidences,
-                    scores, pred_titles, se_positions=se_poss, firsthop=False, multihop=True,
-                    save_pred=save_pred, pred_fname_suffix=pred_fname_suffix, data_path=data_path,
-                    save_path=save_path)
-
-
-def evaluate_results(predictions, qids, questions, answers, titles, args, evidences,
-                     scores, pred_titles, se_positions=None, firsthop=False, multihop=False,
-                     save_pred=None, pred_fname_suffix="", data_path=None, save_path=None):
+def evaluate_results(predictions, qids, questions, answers, titles, args, pred_evids,
+                     scores, pred_titles, firsthop=False, multihop=False,
+                     save_pred=None, pred_fname_suffix="", data_path=None, save_path=None,
+                     chains=None):
     """
-    TODO: Implement logic for arg `multihop`
-    TODO: Implement evaluation of `titles`
+    TODO: Implement evaluation of `titles` (i.e. correct document retrieval)
+    TODO: Implement evaluation of `chains`
     """
     # Set path to load evaluation data
     data_path = data_path if data_path is not None else args.test_path
@@ -192,14 +236,14 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
         predictions = topk_preds[:]
         top1_preds = [a[0] for a in topk_preds]
         # Track evidence for evaluation
-        evidences = [evidences[i][:args.top_k] if len(preds) > 0 else [''] for i, preds in enumerate(topk_preds)]
-        top1_evids = [e[0] for e in evidences]
+        pred_evids = [pred_evids[i][:args.top_k] if len(preds) > 0 else [''] for i, preds in enumerate(topk_preds)]
+        top1_evids = [e[0] for e in pred_evids]
     else:
         predictions = [a[:args.top_k] if len(a) > 0 else [''] for a in predictions]
         top1_preds = [a[0] for a in predictions]
         # Track evidence for evaluation
-        evidences = [evidences[i][:args.top_k] if len(preds) > 0 else [''] for i, preds in enumerate(predictions)]
-        top1_evids = [e[0] for e in evidences]
+        pred_evids = [pred_evids[i][:args.top_k] if len(preds) > 0 else [''] for i, preds in enumerate(predictions)]
+        top1_evids = [e[0] for e in pred_evids]
     no_ans = sum([a == '' for a in top1_preds])
     logger.info(f'no_ans/all: {no_ans}, {len(top1_preds)}')
     logger.info(f'Evaluating {len(top1_preds)} answers')
@@ -207,7 +251,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     # Get em/f1
     f1s, ems = [], []
     for prediction, groundtruth in zip(top1_preds, answers):
-        if len(groundtruth)==0:
+        if len(groundtruth) == 0:
             f1s.append(0)
             ems.append(0)
             continue
@@ -215,7 +259,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
         ems.append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
     final_f1, final_em = np.mean(f1s), np.mean(ems)
     if not args.regex:
-        logger.info('EM: %.2f, F1: %.2f'%(final_em * 100, final_f1 * 100))
+        logger.info('EM: %.2f, F1: %.2f' % (final_em * 100, final_f1 * 100))
 
     # Top 1/k em (or regex em)
     exact_match_topk = 0
@@ -224,7 +268,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     f1_score_top1 = 0
     redundant_topk = 0
     pred_out = {}
-    agg_pred_out = {}
 
     # Evidence metrics
     evid_exact_match_topk = 0
@@ -241,11 +284,14 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     if firsthop:
         phr_metric = "substr"
 
+    logger.info('Sample predictions:')
     for i in range(len(predictions)):
         # For debugging
         if i < 3:
             logger.info(f'{i+1}) {questions[i]}')
-            logger.info(f'=> groundtruths: {answers[i]}, top 5 prediction: {predictions[i][:5]}, top 5 evidence: {evidences[i][:5]}')
+            logger.info(
+                f'=> groundtruths: {list(zip(titles[i], answers[i]))}, top 5 prediction: {predictions[i][:5]}, ' +
+                f'top 5 title/evidence: {list(zip(pred_titles[i][:5], pred_evids[i][:5]))}')
 
         match_fn = drqa_regex_match_score if args.regex else \
             (drqa_substr_match_score if firsthop else drqa_exact_match_score)
@@ -262,7 +308,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
             # Evaluate evidence (sentence) retrieval
             evid_em_topk = max([drqa_metric_max_over_ground_truths(
                 drqa_exact_match_score, evidence, answers[i]
-            ) for evidence in evidences[i][:args.top_k]])
+            ) for evidence in pred_evids[i][:args.top_k]])
             evid_em_top1 = drqa_metric_max_over_ground_truths(
                 drqa_exact_match_score, top1_evids[i], answers[i]
             )
@@ -292,7 +338,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
                 # Evaluate evidence (sentence) retrieval
                 evid_f1_topk = max([drqa_metric_max_over_ground_truths(
                     match_fn, evidence, answers[i]
-                ) for evidence in evidences[i][:args.top_k]])
+                ) for evidence in pred_evids[i][:args.top_k]])
                 evid_f1_top1 = drqa_metric_max_over_ground_truths(
                     match_fn, top1_evids[i], answers[i]
                 )
@@ -304,7 +350,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
             phr_substr_evid_f1_topk = max([drqa_metric_max_over_ground_truths(
                 drqa_substr_f1_match_score, {
                     'pred_substr': predictions[i][k],
-                    'pred_f1': evidences[i][k]
+                    'pred_f1': pred_evids[i][k]
                 }, answers[i]
             ) for k in range(args.top_k)])
             phr_substr_evid_f1_top1 = drqa_metric_max_over_ground_truths(
@@ -322,7 +368,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
             'question': questions[i],
             'answer': answers[i], 'title': titles[i][0],
             'pred_phrase': predictions[i], 'pred_title': [pt[0] for pt in pred_titles[i]],
-            'pred_evidence': evidences[i] if evidences is not None else '',
+            'pred_evidence': pred_evids[i] if pred_evids is not None else '',
             'score': scores[i],
             f'{phr_metric}_top1': bool(em_top1), f'{phr_metric}_top{args.top_k}': bool(em_topk),
             'f1_top1': f1_top1, f'f1_top{args.top_k}': f1_topk,
@@ -435,8 +481,8 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, eviden
     return return_tuple
 
 
-def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, evidences,
-                          scores, pred_titles, se_positions=None, save_pred=False, pred_fname_suffix="",
+def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, pred_evids,
+                          scores, pred_titles, save_pred=False, pred_fname_suffix="",
                           data_path=None, save_path=None):
     total=len(predictions)
 
@@ -512,7 +558,7 @@ def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, e
         pred_out[qids[i]] = {
                 'question': questions[i],
                 'answer': answers[i], 'prediction': predictions[i], 'score': scores[i], 'title': pred_titles[i],
-                'evidence': evidences[i] if evidences is not None else '',
+                'evidence': pred_evids[i] if pred_evids is not None else '',
                 'em_top1': bool(local_accuracy),
         }
 
@@ -596,36 +642,58 @@ def evaluate_results_psg(pred_path, args):
     command = f'python scripts/postprocess/recall.py --k_values 1,5,20,100 --results_file {out_file} --ans_fn string'
     subprocess.run(command.split(' '))
 
-def extract_top_pred_chains(fh_score, final_prediction, final_score, final_title, args):
+
+def extract_top_pred_chains(fh_data, final_data, args):
     """
     For a given question, takes in first hop scores (as a list), second_hop scores as list of list, 
     second hop final answer and title array. Output is list of topk phrases, list of scores and list of titles 
     """
-    # Flatten the list
-    final_pred_flat = [ans for sub_li in final_prediction for ans in sub_li]
-    final_score_flat = [score_val for sub_li in final_score for score_val in sub_li]
-    final_title_flat = [title_text for sub_li in final_title for title_text in sub_li]
+    fh_preds, fh_scores, fh_titles, fh_evids = fh_data
+    final_predictions, final_scores, final_titles, final_evids = final_data
+
+    fhop_len = len(fh_preds)
 
     # Convert to numpy arrays for faster computations
-    final_score_arr = np.array(final_score_flat).reshape((-1, args.top_k, args.top_k))
-    final_pred_arr  = np.array(final_pred_flat).reshape((-1, args.top_k, args.top_k))
-    final_title_arr  = np.array(final_title_flat).reshape((-1, args.top_k, args.top_k))
-    score_fhop = [fh_score]
+    final_score_arr = np.array(final_scores)
+    final_pred_arr = np.array(final_predictions)
+    final_title_arr = np.array(final_titles)
+    final_evid_arr = np.array(final_evids)
+    fh_score_arr = np.array(fh_scores)
+    fh_pred_arr = np.array(fh_preds)
+    fh_title_arr = np.array(fh_titles)
+    fh_evid_arr = np.array(fh_evids)
 
-    # Get overall score by multiplication of scores
-    path_scores = np.expand_dims(score_fhop, axis=2)*final_score_arr
-    search_scores = np.squeeze(path_scores)
+    # Get chain scores
+    if args.chain_score_op == 'sum':
+        path_scores = fh_score_arr + final_score_arr
+    elif args.chain_score_op == 'prod':
+        path_scores = fh_score_arr * final_score_arr
+    else:
+        raise ValueError(f'Invalid argument {args.chain_score_op} used for --chain_score_op')
+
     # Get 2D index based on ranking
-    ranked_pairs = np.vstack(np.unravel_index(np.argsort(search_scores.ravel())[::-1],(args.top_k, args.top_k))).transpose()
-    start_idx = [item[0] for item in ranked_pairs[:args.top_k]]
-    end_idx   = [item[1] for item in ranked_pairs[:args.top_k]]
+    ranked_pairs = np.vstack(
+        np.unravel_index(np.argsort(path_scores.ravel())[::-1], (fhop_len, args.top_k))).transpose()
+    start_idx, end_idx = list(zip(*ranked_pairs[:args.top_k]))
 
     # Get final top-k answers, titles and phrases
-    chain_top_ans = np.squeeze(final_pred_arr)[start_idx, end_idx]
-    chain_top_titles = np.squeeze(final_title_arr)[start_idx, end_idx]
-    chain_top_score  = np.squeeze(path_scores)[start_idx, end_idx]
+    topk_chain_scores = path_scores[start_idx, end_idx]
 
-    return list(chain_top_ans), list(chain_top_titles), list(chain_top_score)
+    topk_final_preds = final_pred_arr[start_idx, end_idx]
+    topk_final_titles = final_title_arr[start_idx, end_idx]
+    topk_final_evids = final_evid_arr[start_idx, end_idx]
+
+    topk_fh_preds = np.expand_dims(fh_pred_arr, axis=-1)[start_idx, [0] * len(start_idx)]
+    topk_fh_titles = np.expand_dims(fh_title_arr, axis=-1)[start_idx, [0] * len(start_idx)]
+    topk_fh_evids = np.expand_dims(fh_evid_arr, axis=-1)[start_idx, [0] * len(start_idx)]
+
+    topk_pred_chains = list(zip(topk_fh_preds, topk_final_preds))
+    topk_title_chains = list(zip(topk_fh_titles, topk_final_titles))
+    topk_evid_chains = list(zip(topk_fh_evids, topk_final_evids))
+
+    return list(topk_final_preds), list(topk_chain_scores), list(topk_final_titles), list(topk_final_evids), \
+           (topk_pred_chains, topk_title_chains, topk_evid_chains)
+
 
 if __name__ == '__main__':
     # See options in densephrases.options
