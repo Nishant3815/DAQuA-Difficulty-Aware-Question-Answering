@@ -82,6 +82,7 @@ class Options():
                                  help="multiple threads for converting example to features")
         self.parser.add_argument("--truecase_path", type=str, default='truecase/english_with_questions.dist')
         self.parser.add_argument("--truecase", action="store_true", help="Dummy (automatic truecasing supported)")
+        self.parser.add_argument("--data_sub", type=float, default=None, help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
 
     # Reading comprehension (single-passage training) options
     def add_rc_options(self):
