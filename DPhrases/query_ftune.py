@@ -90,7 +90,7 @@ def shuffle_data(data, args):
             assert (args.data_sub <=len(qa_pairs))
             qa_pairs_set = qa_pairs[:args.data_sub]
             logger.info("{} number of dataset instances selected for run")
-    q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
+    q_ids, questions, answers, titles, final_answers, final_titles, levels = zip(*qa_pairs_set)
     logger.info(f'Shuffled and Subsetted QA pairs')
     return q_ids, questions, answers, titles, final_answers, final_titles, levels
 
