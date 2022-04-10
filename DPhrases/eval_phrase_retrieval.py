@@ -665,9 +665,9 @@ def extract_top_pred_chains(fh_data, final_data, args):
 
     # Get chain scores
     if args.chain_score_op == 'sum':
-        path_scores = fh_score_arr + final_score_arr
+        path_scores = (fh_score_arr + final_score_arr.T).T
     elif args.chain_score_op == 'prod':
-        path_scores = fh_score_arr * final_score_arr
+        path_scores = (fh_score_arr * final_score_arr.T).T
     else:
         raise ValueError(f'Invalid argument {args.chain_score_op} used for --chain_score_op')
 
