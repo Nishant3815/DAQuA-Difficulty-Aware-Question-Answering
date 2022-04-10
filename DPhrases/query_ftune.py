@@ -342,7 +342,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
                 for i, q in enumerate(questions):
-                    for t in tgts[i].numpy():
+                    for t in tgts_t[i].numpy():
+                        t = int(t)
                         upd_q_id = q_ids[i] + f"_{t}"
                         upd_evidence = outs[i][t]['answer']
                         upd_evidence_title = outs[i][t]['title'][0]
@@ -390,7 +391,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                 upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
                                 upd_answer_titles) in enumerate(top_phrases_upd):
                             pbar.set_description(
-                                f"2nd hop: {upd_step_idx + 1} / {len(top_phrases_upd)}"
+                                f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
                             )
                             upd_train_dataloader, _, _ = get_question_dataloader(
                                 upd_questions, tokenizer, args.max_query_length,
@@ -463,7 +464,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 f"(first-hop) acc@1: {np.mean(total_accs):.3f} | " +
                 f"acc@{args.top_k}: {np.mean(total_accs_k):.3f}"
                 +
-                f"(second-hop) acc@1: {np.mean(total_u_accs):.3f} | " +
+                f"; (second-hop) acc@1: {np.mean(total_u_accs):.3f} | " +
                 f"acc@{args.top_k}: {np.mean(total_u_accs_k):.3f}"
             )
 
