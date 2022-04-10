@@ -73,8 +73,8 @@ def is_train_param(name):
 
 
 def shuffle_data(data, args):
-    q_ids, questions, answers, titles, final_answers, final_titles = data
-    qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles))
+    q_ids, questions, answers, titles, final_answers, final_titles, levels = data
+    qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles, levels))
     random.shuffle(qa_pairs)
     # Subset data for tuning (if required)
     if not args.data_sub:
@@ -92,7 +92,7 @@ def shuffle_data(data, args):
             logger.info("{} number of dataset instances selected for run")
     q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
     logger.info(f'Shuffled and Subsetted QA pairs')
-    return q_ids, questions, answers, titles, final_answers, final_titles
+    return q_ids, questions, answers, titles, final_answers, final_titles, levels
 
 
 def get_optimizer_scheduler(encoder, args, train_len, dev_len, n_epochs):
@@ -161,21 +161,21 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_accs_k = []
 
             # Load training dataset
-            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
+            q_ids, questions, answers, titles, final_answers, final_titles, levels = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, levels, agg_strat=args.warmup_agg_strat)
             )
 
-            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
+            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles, levels) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
 
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
-                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args,
+                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args, 
                                                               label_strat=args.warmup_label_strat)
 
                 target_encoder.train()
@@ -183,10 +183,15 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 svs_t = torch.Tensor(svs).to(device)  # shape: (bs, 2*topk, hid_dim)
                 # End vectors
                 evs_t = torch.Tensor(evs).to(device)
+
+                # Update tgt and p_tgt to filter out loss contributions from easy questions
+                tgts_res = [[None]*len(tgt) if lev=='easy' else tgt for tgt, lev in zip(tgts, levels)]
+                p_tgts_res = [[None]*len(p_tgt) if lev=='easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+
                 # Target indices for phrases
-                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_res]
                 # Target indices for doc
-                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts_res]
 
                 # Train query encoder
                 assert len(train_dataloader) == 1
@@ -313,14 +318,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_u_accs_k = []
 
             # Get questions and corresponding answers with other metadata
-            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
+            q_ids, questions, answers, titles, final_answers, final_titles, levels = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, levels, agg_strat=args.warmup_agg_strat)
             )
-            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
+            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles, levels) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
 
                 train_dataloader, _, _ = get_question_dataloader(
@@ -334,10 +339,15 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 svs_t = torch.Tensor(svs).to(device)  # shape: (bs, 2*topk, hid_dim)
                 # End vectors
                 evs_t = torch.Tensor(evs).to(device)
+
+                # Update tgt and p_tgt to filter out loss contributions from easy questions 
+                tgts_res = [[None]*len(tgt) if lev=='easy' else tgt for tgt, lev in zip(tgts, levels)]
+                p_tgts_res = [[None]*len(p_tgt) if lev=='easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+
                 # Target indices for phrases
-                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_res]
                 # Target indices for doc
-                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts_res]
 
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
@@ -349,8 +359,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         upd_evidence_title = outs[i][t]['title'][0]
                         upd_answer = final_answers[i]
                         upd_answer_title = final_titles[i]
+                        upd_level = levels[i]
                         upd_queries.append(
-                            (upd_q_id, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
+                            (upd_q_id, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title, upd_level)
                         )
 
                 # Train query encoder
@@ -378,18 +389,18 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             total_accs_k += [0.0] * len(tgts_t)
 
                         # Joint training: 2nd stage
-                        upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_answers, upd_answer_titles = \
+                        upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_answers, upd_answer_titles, upd_levels = \
                             list(zip(*upd_queries))
                         upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
                         top_phrases_upd = get_top_phrases(
                             mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, target_encoder,
-                            tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles,
+                            tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles, upd_levels, 
                             agg_strat=args.agg_strat
                         )
                         u_loss_arr = []
                         for upd_step_idx, (
                                 upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
-                                upd_answer_titles) in enumerate(top_phrases_upd):
+                                upd_answer_titles, upd_levels) in enumerate(top_phrases_upd):
                             pbar.set_description(
                                 f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
                             )
@@ -496,7 +507,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
 
 def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers,
-                    final_titles, agg_strat=None):
+                    final_titles, levels, agg_strat=None):
     # Search
     step = batch_size
     search_fn = mips.search
@@ -523,7 +534,7 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
 
         yield (
             q_ids[q_idx:q_idx + step], questions[q_idx:q_idx + step], answers[q_idx:q_idx + step],
-            titles[q_idx:q_idx + step], outs, final_answers[q_idx:q_idx + step], final_titles[q_idx:q_idx + step]
+            titles[q_idx:q_idx + step], outs, final_answers[q_idx:q_idx + step], final_titles[q_idx:q_idx + step], levels[q_idx:q_idx + step]
         )
 
 
