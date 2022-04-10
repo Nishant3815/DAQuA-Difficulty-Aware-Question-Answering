@@ -388,67 +388,70 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             total_accs += [0.0] * len(tgts_t)
                             total_accs_k += [0.0] * len(tgts_t)
 
-                        # Joint training: 2nd stage
-                        upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_answers, upd_answer_titles, upd_levels = \
-                            list(zip(*upd_queries))
-                        upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
-                        top_phrases_upd = get_top_phrases(
-                            mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, target_encoder,
-                            tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles, upd_levels, 
-                            agg_strat=args.agg_strat
-                        )
-                        u_loss_arr = []
-                        for upd_step_idx, (
-                                upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
-                                upd_answer_titles, upd_levels) in enumerate(top_phrases_upd):
-                            pbar.set_description(
-                                f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
+                        if len(upd_queries) > 0:
+                            # Joint training: 2nd stage
+                            upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_answers, upd_answer_titles, upd_levels = \
+                                list(zip(*upd_queries))
+                            upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
+                            top_phrases_upd = get_top_phrases(
+                                mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, target_encoder,
+                                tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles, upd_levels,
+                                agg_strat=args.agg_strat
                             )
-                            upd_train_dataloader, _, _ = get_question_dataloader(
-                                upd_questions, tokenizer, args.max_query_length,
-                                batch_size=args.per_gpu_train_batch_size
-                            )
-                            u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
-                                                                                  upd_answers, upd_answer_titles,
-                                                                                  upd_outs,
-                                                                                  args,
-                                                                                  label_strat=args.label_strat)
-                            # Start vectors
-                            u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
-                            # End vectors
-                            u_evs_t = torch.Tensor(u_evs).to(device)
-                            # Target indices for phrases
-                            u_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
-                                      u_tgts]
-                            # Target indices for doc
-                            u_p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
-                                        u_p_tgts]
-                            # Train query encoder
-                            assert len(upd_train_dataloader) == 1
-                            for u_batch in upd_train_dataloader:
-                                u_batch = tuple(t.to(device) for t in u_batch)
-                                u_loss, u_accs = target_encoder.train_query(
-                                    input_ids_=u_batch[0], attention_mask_=u_batch[1], token_type_ids_=u_batch[2],
-                                    start_vecs=u_svs_t,
-                                    end_vecs=u_evs_t,
-                                    targets=u_tgts_t,
-                                    p_targets=u_p_tgts_t,
+                            u_loss_arr = []
+                            for upd_step_idx, (
+                                    upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
+                                    upd_answer_titles, upd_levels) in enumerate(top_phrases_upd):
+                                pbar.set_description(
+                                    f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
                                 )
-                                if u_loss is not None:
-                                    if args.gradient_accumulation_steps > 1:
-                                        u_loss = u_loss / args.gradient_accumulation_steps
-                                    u_loss_arr.append(u_loss.mean())
-                                    if u_accs is not None:
-                                        total_u_accs += u_accs
-                                        total_u_accs_k += [len(tgt) > 0 for tgt in u_tgts_t]
-                                    else:
-                                        total_u_accs += [0.0] * len(u_tgts_t)
-                                        total_u_accs_k += [0.0] * len(u_tgts_t)
-                        # Average ans_loss over total number of original questions
-                        ans_loss = sum(u_loss_arr) / (upd_step_idx + 1)
+                                upd_train_dataloader, _, _ = get_question_dataloader(
+                                    upd_questions, tokenizer, args.max_query_length,
+                                    batch_size=args.per_gpu_train_batch_size
+                                )
+                                u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
+                                                                                      upd_answers, upd_answer_titles,
+                                                                                      upd_outs,
+                                                                                      args,
+                                                                                      label_strat=args.label_strat)
+                                # Start vectors
+                                u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
+                                # End vectors
+                                u_evs_t = torch.Tensor(u_evs).to(device)
+                                # Target indices for phrases
+                                u_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
+                                          u_tgts]
+                                # Target indices for doc
+                                u_p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
+                                            u_p_tgts]
+                                # Train query encoder
+                                assert len(upd_train_dataloader) == 1
+                                for u_batch in upd_train_dataloader:
+                                    u_batch = tuple(t.to(device) for t in u_batch)
+                                    u_loss, u_accs = target_encoder.train_query(
+                                        input_ids_=u_batch[0], attention_mask_=u_batch[1], token_type_ids_=u_batch[2],
+                                        start_vecs=u_svs_t,
+                                        end_vecs=u_evs_t,
+                                        targets=u_tgts_t,
+                                        p_targets=u_p_tgts_t,
+                                    )
+                                    if u_loss is not None:
+                                        if args.gradient_accumulation_steps > 1:
+                                            u_loss = u_loss / args.gradient_accumulation_steps
+                                        u_loss_arr.append(u_loss.mean())
+                                        if u_accs is not None:
+                                            total_u_accs += u_accs
+                                            total_u_accs_k += [len(tgt) > 0 for tgt in u_tgts_t]
+                                        else:
+                                            total_u_accs += [0.0] * len(u_tgts_t)
+                                            total_u_accs_k += [0.0] * len(u_tgts_t)
+                            # Average ans_loss over total number of original questions
+                            ans_loss = sum(u_loss_arr) / (upd_step_idx + 1)
 
-                        # Final loss: combine first- and second-hop loss values
-                        loss = lmbda * fhop_loss + (1 - lmbda) * ans_loss
+                            # Final loss: combine first- and second-hop loss values
+                            loss = lmbda * fhop_loss + (1 - lmbda) * ans_loss
+                        else:
+                            loss = fhop_loss
 
                         # Backpropagate combined loss and update model
                         if args.fp16:
