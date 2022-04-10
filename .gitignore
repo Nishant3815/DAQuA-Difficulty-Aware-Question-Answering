@@ -16,3 +16,6 @@ DPhrases/.ipynb_checkpoints/
 DPhrases/.helper.py.swp
 DPhrases/__pycache__/
 DPhrases/helper.py
+DPhrases/cache/
+DPhrases/dap.egg-info/
+DPhrases/wip.egg-info/

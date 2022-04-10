@@ -72,12 +72,26 @@ def is_train_param(name):
     return True
 
 
-def shuffle_data(data):
+def shuffle_data(data, args):
     q_ids, questions, answers, titles, final_answers, final_titles = data
     qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles))
     random.shuffle(qa_pairs)
-    q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs)
-    logger.info(f'Shuffling QA pairs')
+    # Subset data for tuning (if required)
+    if not args.data_sub:
+        qa_pairs_set = qa_pairs
+        logger.info("Full Dataset selected for run")
+    else:
+        if args.data_sub < 1:
+            assert (args.data_sub >= 0)
+            sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
+            qa_pairs_set = qa_pairs[:sub_val]
+            logger.info("{args.data_sub} fraction of dataset selected for run")
+        else:
+            assert (args.data_sub <=len(qa_pairs))
+            qa_pairs_set = qa_pairs[:args.data_sub]
+            logger.info("{} number of dataset instances selected for run")
+    q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
+    logger.info(f'Shuffled and Subsetted QA pairs')
     return q_ids, questions, answers, titles, final_answers, final_titles
 
 
@@ -147,7 +161,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_accs_k = []
 
             # Load training dataset
-            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs)
+            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
@@ -299,7 +313,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_u_accs_k = []
 
             # Get questions and corresponding answers with other metadata
-            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs)
+            q_ids, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
