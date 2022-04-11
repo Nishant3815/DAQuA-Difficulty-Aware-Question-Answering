@@ -103,6 +103,7 @@ def get_query2vec(query_encoder, tokenizer, args, batch_size=64):
 
 def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=False, multihop=False):
     q_ids = []
+    levels = []
     questions = []
     answers = []
     titles = []
@@ -113,19 +114,23 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
         if q_idx is not None:
             if data_idx != q_idx:
                 continue
+        answer = item['answers']
+        if len(answer) == 0:
+            continue
         q_id = item['id']
         if 'origin' in item:
             q_id = item['origin'].split('.')[0] + '-' + q_id
+        level = ''
+        if 'level' in item:
+            level = item['level']
         question = item['question']
         if '[START_ENT]' in question:
             question = question[max(question.index('[START_ENT]')-300, 0):question.index('[END_ENT]')+300]
-        answer = item['answers']
         title = item.get('titles', [''])
         final_answer = item.get('final_answer', '')
         final_title = item.get('final_title', '')
-        if len(answer) == 0:
-            continue
         q_ids.append(q_id)
+        levels.append(level)
         questions.append(question)
         answers.append(answer)
         titles.append(title)
@@ -139,13 +144,14 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
         questions = [query.lower() for query in questions]
 
     if shuffle:
-        qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles))
+        qa_pairs = list(zip(q_ids, levels, questions, answers, titles, final_answers, final_titles))
         random.shuffle(qa_pairs)
-        q_ids, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs)
+        q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs)
         logger.info(f'Shuffling QA pairs')
 
     if args.draft:
         q_ids = np.array(q_ids)[:draft_num_examples].tolist()
+        levels = np.array(levels)[:draft_num_examples].tolist()
         questions = np.array(questions)[:draft_num_examples].tolist()
         answers = np.array(answers)[:draft_num_examples].tolist()
         titles = np.array(titles)[:draft_num_examples].tolist()
@@ -164,9 +170,9 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
             print(e)
 
     logger.info(f'Loading {len(questions)} questions from {data_path}')
-    logger.info(f'Sample Q ({q_ids[0]}): {questions[0]}, A: {answers[0]}, Title: {titles[0]}' +
+    logger.info(f'Sample Q ({q_ids[0]}; {levels[0]}): {questions[0]}, A: {answers[0]}, Title: {titles[0]}' +
                 ('' if not multihop else f', Final Answer: {final_answers[0]}'))
     if multihop:
-        return q_ids, questions, answers, titles, final_answers, final_titles
-    return q_ids, questions, answers, titles
+        return q_ids, levels, questions, answers, titles, final_answers, final_titles
+    return q_ids, levels, questions, answers, titles
 
