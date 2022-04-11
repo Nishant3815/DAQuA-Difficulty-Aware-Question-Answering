@@ -73,8 +73,8 @@ def is_train_param(name):
 
 
 def shuffle_data(data, args):
-    q_ids, questions, answers, titles, final_answers, final_titles, levels = data
-    qa_pairs = list(zip(q_ids, questions, answers, titles, final_answers, final_titles, levels))
+    q_ids, levels, questions, answers, titles, final_answers, final_titles = data
+    qa_pairs = list(zip(q_ids, levels, questions, answers, titles, final_answers, final_titles))
     random.shuffle(qa_pairs)
     # Subset data for tuning (if required)
     if not args.data_sub:
@@ -90,9 +90,9 @@ def shuffle_data(data, args):
             assert (args.data_sub <=len(qa_pairs))
             qa_pairs_set = qa_pairs[:args.data_sub]
             logger.info("{} number of dataset instances selected for run")
-    q_ids, questions, answers, titles, final_answers, final_titles, levels = zip(*qa_pairs_set)
+    q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
     logger.info(f'Shuffled and Subsetted QA pairs')
-    return q_ids, questions, answers, titles, final_answers, final_titles, levels
+    return q_ids, levels, questions, answers, titles, final_answers, final_titles
 
 
 def get_optimizer_scheduler(encoder, args, train_len, dev_len, n_epochs):
@@ -161,15 +161,15 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_accs_k = []
 
             # Load training dataset
-            q_ids, questions, answers, titles, final_answers, final_titles, levels = shuffle_data(train_qa_pairs, args)
+            q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, levels, agg_strat=args.warmup_agg_strat)
+                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
             )
 
-            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles, levels) in enumerate(pbar):
+            for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
 
                 train_dataloader, _, _ = get_question_dataloader(
@@ -318,14 +318,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_u_accs_k = []
 
             # Get questions and corresponding answers with other metadata
-            q_ids, questions, answers, titles, final_answers, final_titles, levels = shuffle_data(train_qa_pairs, args)
+            q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, levels, agg_strat=args.warmup_agg_strat)
+                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
             )
-            for step_idx, (q_ids, questions, answers, titles, outs, final_answers, final_titles, levels) in enumerate(pbar):
+            for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
 
                 train_dataloader, _, _ = get_question_dataloader(
@@ -509,8 +509,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
         logger.info(f"Best model (epoch {best_epoch}) with accuracy {best_acc:.3f} saved at {save_path}")
 
 
-def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers,
-                    final_titles, levels, agg_strat=None):
+def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers,
+                    final_titles, agg_strat=None):
     # Search
     step = batch_size
     search_fn = mips.search
@@ -536,8 +536,9 @@ def get_top_phrases(mips, q_ids, questions, answers, titles, query_encoder, toke
         )
 
         yield (
-            q_ids[q_idx:q_idx + step], questions[q_idx:q_idx + step], answers[q_idx:q_idx + step],
-            titles[q_idx:q_idx + step], outs, final_answers[q_idx:q_idx + step], final_titles[q_idx:q_idx + step], levels[q_idx:q_idx + step]
+            q_ids[q_idx:q_idx + step], levels[q_idx:q_idx + step], questions[q_idx:q_idx + step],
+            answers[q_idx:q_idx + step], titles[q_idx:q_idx + step], outs, final_answers[q_idx:q_idx + step],
+            final_titles[q_idx:q_idx + step]
         )
 
 
