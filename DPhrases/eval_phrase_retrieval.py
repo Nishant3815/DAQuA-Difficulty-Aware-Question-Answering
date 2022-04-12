@@ -155,9 +155,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             query_vec[q_idx:q_idx+step],
             q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
             top_k=args.hop_top_k, max_answer_length=args.max_answer_length,
-            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True,
-            prune_low_preds=True
-        )
+            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True)
 
         fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_evid_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
@@ -683,23 +681,23 @@ def extract_top_pred_chains(fh_data, final_data, args):
     ranked_pairs = np.vstack(
         np.unravel_index(np.argsort(path_scores.ravel())[::-1], (fhop_len, args.top_k))).transpose()
     # Get the start and end idx for all the ranked pairs in 2D matrix
-    # start_idx, end_idx = list(zip(*ranked_pairs))
+    start_idx, end_idx = list(zip(*ranked_pairs))
     # top_final_preds = final_pred_arr[start_idx, end_idx]
     # Subset removing the duplicates from ranked predictions, dictionary is ordered from Python3 
     # topk_final_preds  = np.array(list(dict.fromkeys(top_final_preds))[:args.top_k]) # Effiecient method but need to think of scores and evids idx
-    covered = set()
+    covered = list()
     st_idx_li = []
     en_idx_li = []
     val_topk = args.top_k
-    for s_idx, e_idx in ranked_pairs:
-        if final_pred_arr[s_idx, e_idx] not in covered and val_topk:
-            val_topk -= 1
-            st_idx_li.append(s_idx)
-            en_idx_li.append(e_idx)
-            covered.add(final_pred_arr[s_idx, e_idx])
+    for s_idx, e_idx in zip(start_idx, end_idx):
+    if final_pred_arr[s_idx,e_idx] not in covered and val_topk:
+        val_topk -= 1
+        st_idx_li.append(s_idx)
+        en_idx_li.append(e_idx)
+        covered.append(final_pred_arr[s_idx,e_idx])
 
     # Get final top-k answers, titles and phrases
-    topk_chain_scores = path_scores[st_idx_li, en_idx_li]
+    top_chain_scores = path_scores[st_idx_li, en_idx_li]
 
     topk_final_preds = final_pred_arr[st_idx_li, en_idx_li]
     topk_final_titles = final_title_arr[st_idx_li, en_idx_li]
