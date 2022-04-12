@@ -151,6 +151,7 @@ class Options():
 
     def add_retrieval_options(self):
         self.parser.add_argument('--run_mode', default='eval', help="eval | train_query")
+        self.parser.add_argument('--hop_top_k', type=int, default=50)
         self.parser.add_argument('--top_k', type=int, default=10)
         self.parser.add_argument('--nprobe', type=int, default=256)
         self.parser.add_argument('--aggregate', action='store_true', default=False)
