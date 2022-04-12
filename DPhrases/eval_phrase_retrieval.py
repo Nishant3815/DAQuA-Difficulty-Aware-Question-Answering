@@ -99,6 +99,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         pred_evids = []
         pred_titles = []
         scores = []
+        # We keep top_k here and not hop_top_k as agg_strategy accounts for deduplication
         for q_idx in tqdm(range(0, len(questions), step)):
             result = mips.search(
                 query_vec[q_idx:q_idx+step],
@@ -145,24 +146,24 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         fhop_result = mips.search(
             query_vec[q_idx:q_idx+step],
             q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
-            top_k=args.top_k, max_answer_length=args.max_answer_length,
+            top_k=args.hop_top_k, max_answer_length=args.max_answer_length,
             aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True)
 
-        fhop_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
-        fhop_evid_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
-        fhop_title_unpad = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
-        fhop_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_evid_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_title_unpad = [[ret['title'][0] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_score_unpad = [[ret['score'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
 
         for i, (fh_ques, fh_preds, fh_scores, fh_titles, fh_evids) in enumerate(
                 zip(questions[q_idx:q_idx + step], fhop_pred_unpad, fhop_score_unpad, fhop_title_unpad,
                     fhop_evid_unpad)):
             if len(fh_preds) == 0:
                 # If there are no first-hop predictions, then store a dummy prediction
-                predictions.append(['']*args.top_k)
-                pred_titles.append(['']*args.top_k)
-                scores.append([1e-10]*args.top_k)
-                pred_evids.append(['']*args.top_k)
-                pred_chains.append([['', '']]*args.top_k)
+                predictions.append(['']*args.hop_top_k)
+                pred_titles.append(['']*args.hop_top_k)
+                scores.append([1e-10]*args.hop_top_k)
+                pred_evids.append(['']*args.hop_top_k)
+                pred_chains.append([['', '']]*args.hop_top_k)
                 continue
 
             upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
@@ -674,18 +675,32 @@ def extract_top_pred_chains(fh_data, final_data, args):
     # Get 2D index based on ranking
     ranked_pairs = np.vstack(
         np.unravel_index(np.argsort(path_scores.ravel())[::-1], (fhop_len, args.top_k))).transpose()
-    start_idx, end_idx = list(zip(*ranked_pairs[:args.top_k]))
+    # Get the start and end idx for all the ranked pairs in 2D matrix
+    start_idx, end_idx = list(zip(*ranked_pairs))
+    # top_final_preds = final_pred_arr[start_idx, end_idx]
+    # Subset removing the duplicates from ranked predictions, dictionary is ordered from Python3 
+    # topk_final_preds  = np.array(list(dict.fromkeys(top_final_preds))[:args.top_k]) # Effiecient method but need to think of scores and evids idx
+    covered = list()
+    st_idx_li = []
+    en_idx_li = []
+    val_topk = args.top_k
+    for s_idx, e_idx in zip(start_idx, end_idx):
+    if final_pred_arr[s_idx,e_idx] not in covered and val_topk:
+        val_topk -= 1
+        st_idx_li.append(s_idx)
+        en_idx_li.append(e_idx)
+        covered.append(final_pred_arr[s_idx,e_idx])
 
     # Get final top-k answers, titles and phrases
-    topk_chain_scores = path_scores[start_idx, end_idx]
+    top_chain_scores = path_scores[st_idx_li, en_idx_li]
 
-    topk_final_preds = final_pred_arr[start_idx, end_idx]
-    topk_final_titles = final_title_arr[start_idx, end_idx]
-    topk_final_evids = final_evid_arr[start_idx, end_idx]
+    topk_final_preds = final_pred_arr[st_idx_li, en_idx_li]
+    topk_final_titles = final_title_arr[st_idx_li, en_idx_li]
+    topk_final_evids = final_evid_arr[st_idx_li, en_idx_li]
 
-    topk_fh_preds = np.expand_dims(fh_pred_arr, axis=-1)[start_idx, [0] * len(start_idx)]
-    topk_fh_titles = np.expand_dims(fh_title_arr, axis=-1)[start_idx, [0] * len(start_idx)]
-    topk_fh_evids = np.expand_dims(fh_evid_arr, axis=-1)[start_idx, [0] * len(start_idx)]
+    topk_fh_preds = np.expand_dims(fh_pred_arr, axis=-1)[st_idx_li, [0] * len(st_idx_li)]
+    topk_fh_titles = np.expand_dims(fh_title_arr, axis=-1)[st_idx_li, [0] * len(st_idx_li)]
+    topk_fh_evids = np.expand_dims(fh_evid_arr, axis=-1)[st_idx_li, [0] * len(st_idx_li)]
 
     topk_pred_chains = list(zip(topk_fh_preds, topk_final_preds))
     topk_title_chains = list(zip(topk_fh_titles, topk_final_titles))
