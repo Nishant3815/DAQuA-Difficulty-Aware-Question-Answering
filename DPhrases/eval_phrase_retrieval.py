@@ -68,7 +68,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if firsthop or multihop:
         # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
         # gold_answers, gold_titles -> second-hop answer phrases and titles
-        qids, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx,
+        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx,
                                                                                                  multihop=True)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
