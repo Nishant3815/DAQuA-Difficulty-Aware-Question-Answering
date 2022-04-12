@@ -68,14 +68,8 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if firsthop or multihop:
         # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
         # gold_answers, gold_titles -> second-hop answer phrases and titles
-        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path,
-                                                                                                         args,
-                                                                                                         q_idx,
-                                                                                                         multihop=True)
-        # Skip "easy questions" during evaluation
-        if args.filter_easy:
-            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if lev!='easy']
-            qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
+        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx,
+                                                                                                 multihop=True)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
 
