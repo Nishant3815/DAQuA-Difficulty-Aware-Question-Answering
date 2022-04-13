@@ -91,7 +91,6 @@ def shuffle_data(data, args):
             qa_pairs_set = qa_pairs[:args.data_sub]
             logger.info("{} number of dataset instances selected for run")
     q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
-    logger.info(f'Shuffled and Subsetted QA pairs')
     return q_ids, levels, questions, answers, titles, final_answers, final_titles
 
 
@@ -352,8 +351,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
                 for i, q in enumerate(questions):
-                    for t in tgts_t[i].numpy():
-                        t = int(t)
+                    for t in tgts_t[i]:
+                        t = int(t.item())
                         upd_q_id = q_ids[i] + f"_{t}"
                         upd_evidence = outs[i][t]['answer']
                         upd_evidence_title = outs[i][t]['title'][0]
