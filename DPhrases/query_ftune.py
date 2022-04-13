@@ -340,8 +340,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 evs_t = torch.Tensor(evs).to(device)
 
                 # Update tgt and p_tgt to filter out loss contributions from easy questions 
-                tgts_res = [[None]*len(tgt) if lev=='easy' else tgt for tgt, lev in zip(tgts, levels)]
-                p_tgts_res = [[None]*len(p_tgt) if lev=='easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+                tgts_res = [[None] * len(tgt) if lev == 'easy' else tgt for tgt, lev in zip(tgts, levels)]
+                p_tgts_res = [[None] * len(p_tgt) if lev == 'easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
 
                 # Target indices for phrases
                 tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_res]
@@ -354,13 +354,13 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                     for t in tgts_t[i]:
                         t = int(t.item())
                         upd_q_id = q_ids[i] + f"_{t}"
+                        upd_level = levels[i]
                         upd_evidence = outs[i][t]['answer']
                         upd_evidence_title = outs[i][t]['title'][0]
                         upd_answer = final_answers[i]
                         upd_answer_title = final_titles[i]
-                        upd_level = levels[i]
                         upd_queries.append(
-                            (upd_q_id, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title, upd_level)
+                            (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                         )
 
                 # Train query encoder
@@ -389,18 +389,18 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                         if len(upd_queries) > 0:
                             # Joint training: 2nd stage
-                            upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_answers, upd_answer_titles, upd_levels = \
-                                list(zip(*upd_queries))
+                            upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, \
+                            upd_answers, upd_answer_titles = list(zip(*upd_queries))
                             upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
                             top_phrases_upd = get_top_phrases(
-                                mips, upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, target_encoder,
-                                tokenizer, args.per_gpu_train_batch_size, args, upd_answers, upd_answer_titles, upd_levels,
-                                agg_strat=args.agg_strat
+                                mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
+                                target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
+                                upd_answer_titles, agg_strat=args.agg_strat
                             )
                             u_loss_arr = []
                             for upd_step_idx, (
-                                    upd_q_ids, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
-                                    upd_answer_titles, upd_levels) in enumerate(top_phrases_upd):
+                                    upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
+                                    upd_answer_titles) in enumerate(top_phrases_upd):
                                 pbar.set_description(
                                     f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
                                 )
@@ -508,8 +508,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
         logger.info(f"Best model (epoch {best_epoch}) with accuracy {best_acc:.3f} saved at {save_path}")
 
 
-def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encoder, tokenizer, batch_size, args, final_answers,
-                    final_titles, agg_strat=None):
+def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encoder, tokenizer, batch_size, args,
+                    final_answers, final_titles, agg_strat=None):
     # Search
     step = batch_size
     search_fn = mips.search
