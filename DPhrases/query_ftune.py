@@ -165,7 +165,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             # Progress bar
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
+                always_return_sent=True)
             )
 
             for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
@@ -322,7 +323,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             # Progress bar
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat)
+                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
+                always_return_sent=True)
             )
             for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
@@ -395,14 +397,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             top_phrases_upd = get_top_phrases(
                                 mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
                                 target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
-                                upd_answer_titles, agg_strat=args.agg_strat
+                                upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True
                             )
                             u_loss_arr = []
                             for upd_step_idx, (
                                     upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
                                     upd_answer_titles) in enumerate(top_phrases_upd):
                                 pbar.set_description(
-                                    f"2nd hop: {upd_step_idx + 1} / {len(upd_queries) // args.per_gpu_train_batch_size}"
+                                    f"2nd hop: {upd_step_idx + 1} / {math.ceil(len(upd_queries) / args.per_gpu_train_batch_size)}"
                                 )
                                 upd_train_dataloader, _, _ = get_question_dataloader(
                                     upd_questions, tokenizer, args.max_query_length,
@@ -509,7 +511,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
 
 def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encoder, tokenizer, batch_size, args,
-                    final_answers, final_titles, agg_strat=None):
+                    final_answers, final_titles, agg_strat=None, always_return_sent=False):
     # Search
     step = batch_size
     search_fn = mips.search
@@ -524,14 +526,14 @@ def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encod
 
         agg_strat = agg_strat if agg_strat is not None else args.agg_strat
         # For multi-hop warmup training
-        # return_sent = agg_strat == "opt2a"
+        return_sent = always_return_sent or agg_strat == "opt2a"
 
         outs = search_fn(
             query_vec,
             q_texts=questions[q_idx:q_idx + step], nprobe=args.nprobe,
             top_k=args.top_k, return_idxs=True,
-            max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=args.agg_strat,
-            return_sent=True
+            max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=agg_strat,
+            return_sent=return_sent
         )
 
         yield (
