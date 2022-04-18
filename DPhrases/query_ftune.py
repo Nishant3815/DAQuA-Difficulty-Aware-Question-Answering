@@ -21,6 +21,8 @@ from transformers import (
     AdamW,
     get_linear_schedule_with_warmup,
 )
+import wandb
+
 
 run_id = str(__import__('calendar').timegm(__import__('time').gmtime()))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
@@ -63,6 +65,14 @@ def setup_run():
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
+
+    wandb.init(project="query-fine-tuning",
+        run = run_id,
+        notes="Query fine tuning for MHop retrieval",
+        tags=["trial"],
+        config=args,
+        entity="daqua")
+    
 
     return args, save_path
 
@@ -246,6 +256,16 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 f"acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
             )
 
+            wandb.log({
+            "Epoch": ep_idx + 1,
+            "Avg train loss": total_loss / step_idx,
+            "acc@1": sum(total_accs) / len(total_accs),
+            f"acc@{args.top_k}": sum(total_accs_k) / len(total_accs_k),
+            "iterations": step_idx,
+            "phase": "Warmup Training"}
+            )
+
+
             if not args.skip_warmup_dev_eval:
                 # Dev evaluation
                 print("\n")
@@ -268,6 +288,16 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 logger.info(f"Dev set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
                 logger.info(f"Dev set (evidence) acc@1: {evid_dev_em:.3f}, f1@1: {evid_dev_f1:.3f}")
                 logger.info(f"Dev set (joint) acc@1: {joint_substr_f1:.3f}")
+
+                wandb.log({
+                "Epoch": ep_idx + 1,
+                "Dev set acc@1": dev_em,
+                "Dev set f1@1": dev_f1,
+                "Dev set (evidence) acc@1": evid_dev_em,
+                "Dev set (evidence) f1@1": evid_dev_f1,
+                "Dev set (joint) f1@1": joint_substr_f1,
+                "phase": "Warmup Dev set Eval"}
+                )
 
                 # Save best model
                 if dev_metrics[args.warmup_dev_metric] > best_acc:
@@ -501,6 +531,17 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 f"acc@{args.top_k}: {np.mean(total_u_accs_k):.3f}"
             )
 
+            wandb.log({
+                "Epoch": ep_idx + 1,
+                "iterations": step_idx,
+                "Avg train loss": total_loss / step_idx,
+                "(first-hop) acc@1": np.mean(total_accs),
+                f"(first-hop) acc@{args.top_k}": np.mean(total_accs_k),
+                "(second-hop) acc@1": np.mean(total_u_accs),
+                f"(second-hop) acc@{args.top_k}": np.mean(total_u_accs_k),
+                "phase": "Joint Training"}
+            )
+
             # Dev evaluation
             print("\n")
             logger.info("Evaluating on the DEV set")
@@ -517,6 +558,13 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # TODO: Remove duplication of this code block (I think there are 3 of these in this file)
             }
             logger.info(f"Dev set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
+
+            wandb.log({
+            "Epoch": ep_idx + 1,
+            "Dev set acc@1": dev_em,
+            "Dev set f1@1": dev_f1,
+            "phase": "Dev set Eval"}
+            )
 
             # Save best model
             if dev_metrics[args.dev_metric] > best_acc:

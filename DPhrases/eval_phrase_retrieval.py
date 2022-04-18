@@ -20,7 +20,7 @@ from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load
 from densephrases.utils.kilt.eval import evaluate as kilt_evaluate
 from densephrases.utils.kilt.kilt_utils import store_data as kilt_store_data
 from densephrases import Options
-
+import wandb
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s', datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -483,6 +483,8 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         with open(agg_pred_path, 'w') as f:
             json.dump(agg_pred_out, f, indent=2)
 
+    wandb.log(agg_pred_out)
+
     # Evaluate passage retrieval
     if args.eval_psg:
         evaluate_results_psg(pred_path, args)
@@ -554,6 +556,11 @@ def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, p
     }
 
     logger.info(result_to_logging)
+
+    # TODO: results to logging wandb
+    wandb.log(result_to_logging)
+
+
 
     # make custom predictions
     pred_out = {}
@@ -732,6 +739,13 @@ if __name__ == '__main__':
     options.add_data_options()
     args = options.parse()
 
+    wandb.init(project="eval-phrase-retrieval",
+    run = run_id,
+    notes="Evaluating Phrase Retrieval Script.",
+    tags=["trial"],
+    config=args,
+    entity="daqua")
+    
     # Seed for reproducibility
     random.seed(args.seed)
     np.random.seed(args.seed)
