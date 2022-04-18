@@ -6,6 +6,7 @@ import logging
 import math
 import copy
 from tqdm import tqdm
+from apex import amp
 from IPython import embed
 
 from densephrases.utils.squad_utils import get_question_dataloader
@@ -123,7 +124,10 @@ def get_optimizer_scheduler(encoder, args, train_len, dev_len, n_epochs):
     eval_steps = math.ceil(dev_len / args.eval_batch_size)
     logger.info(f"DEV eval takes {eval_steps} iterations")
 
-    return optimizer, scheduler
+    if args.fp16:
+        encoder, optimizer = amp.initialize(encoder, optimizer, opt_level=args.fp16_opt_level)
+
+    return encoder, optimizer, scheduler
 
 
 def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
@@ -148,9 +152,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     if not args.skip_warmup:
         logger.info(f"Starting warmup training")
         # Initialize optimizer & scheduler
-        optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
-                                                       len(dev_qa_pairs[1]),
-                                                       args.num_firsthop_epochs)
+        target_encoder, optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
+                                                                       len(dev_qa_pairs[1]),
+                                                                       args.num_firsthop_epochs)
 
         # Warm-up the model with a first-hop retrieval objective
         for ep_idx in range(int(args.num_firsthop_epochs)):
@@ -302,9 +306,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
 
         # Initialize optimizer & scheduler
-        optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
-                                                       len(dev_qa_pairs[1]),
-                                                       args.num_train_epochs)
+        target_encoder, optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
+                                                                       len(dev_qa_pairs[1]),
+                                                                       args.num_train_epochs)
         # Weight factor for convex combination of the first- and second-hop loss values
         lmbda = args.joint_loss_lambda
         assert 0 <= lmbda <= 1
