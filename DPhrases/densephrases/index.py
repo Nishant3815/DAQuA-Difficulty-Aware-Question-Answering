@@ -224,7 +224,8 @@ class MIPS(object):
         return b_start_doc_idxs, b_start_idxs, start_I, b_end_doc_idxs, b_end_idxs, end_I, b_start_scores, b_end_scores
 
     def search_phrase(self, query, start_doc_idxs, start_idxs, orig_start_idxs, end_doc_idxs, end_idxs, orig_end_idxs,
-            start_scores, end_scores, top_k=10, max_answer_length=10, return_idxs=False, return_sent=False):
+                      start_scores, end_scores, top_k=10, max_answer_length=10, return_idxs=False, return_sent=False,
+                      prune_low_preds=True):
 
         # Reshape for phrase
         num_queries = query.shape[0]
@@ -423,7 +424,8 @@ class MIPS(object):
             new_out[idx].append(each_out)
         for i in range(len(new_out)):
             new_out[i] = sorted(new_out[i], key=lambda each_out: -each_out['score'])
-            new_out[i] = list(filter(lambda x: x['score'] > -1e5, new_out[i])) # In case of no output but masks
+            if prune_low_preds:
+                new_out[i] = list(filter(lambda x: x['score'] > -1e5, new_out[i])) # In case of no output but masks
         logger.debug(f'4) {time()-start_time:.3f}s: get metadata')
         return new_out
 
@@ -455,10 +457,8 @@ class MIPS(object):
         results = list(filter(lambda x: x['score'] > -1e5, results)) # not exactly top-k but will be cut during evaluation
         return results
 
-    def search(self, query, q_texts=None,
-               nprobe=256, top_k=10,
-               aggregate=False, return_idxs=False,
-               max_answer_length=10, agg_strat='opt1', return_sent=False):
+    def search(self, query, q_texts=None, nprobe=256, top_k=10, aggregate=False, return_idxs=False,
+               max_answer_length=10, agg_strat='opt1', return_sent=False, prune_low_preds=True):
 
         # MIPS on start/end
         start_time = time()
@@ -474,7 +474,8 @@ class MIPS(object):
         start_time = time()
         outs = self.search_phrase(
             query, start_doc_idxs, start_idxs, start_I, end_doc_idxs, end_idxs, end_I, start_scores, end_scores,
-            top_k=top_k, max_answer_length=max_answer_length, return_idxs=return_idxs, return_sent=return_sent
+            top_k=top_k, max_answer_length=max_answer_length, return_idxs=return_idxs, return_sent=return_sent,
+            prune_low_preds=prune_low_preds
         )
         logger.debug(f'Top-{top_k} phrase search: {time()-start_time:.3f}s')
 
