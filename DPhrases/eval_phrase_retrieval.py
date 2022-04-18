@@ -68,8 +68,10 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if firsthop or multihop:
         # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
         # gold_answers, gold_titles -> second-hop answer phrases and titles
-        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx,
-                                                                                                 multihop=True)
+        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path,
+                                                                                                         args,
+                                                                                                         q_idx,
+                                                                                                         multihop=True)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
 
@@ -105,7 +107,8 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 query_vec[q_idx:q_idx+step],
                 q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
                 top_k=args.top_k, max_answer_length=args.max_answer_length,
-                aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent
+                aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent,
+                prune_low_preds=False
             )
             prediction = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
             evidence = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
@@ -147,7 +150,9 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             query_vec[q_idx:q_idx+step],
             q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
             top_k=args.hop_top_k, max_answer_length=args.max_answer_length,
-            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True)
+            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True,
+            prune_low_preds=True
+        )
 
         fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_evid_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
@@ -171,29 +176,20 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
             final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe,
                                        top_k=args.top_k, max_answer_length=args.max_answer_length,
-                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True)
+                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True,
+                                       prune_low_preds=False)
 
-            final_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_predictions = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                 final_result]
-            final_evid_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_evids = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                 final_result]
-            final_title_unpad = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_titles = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                  final_result]
-            final_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_scores = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                  final_result]
-
-            # Pad answers, titles and scores if length of sublist is less than top_k
-            final_predictions = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else
-                                sub_li for sub_li in final_pred_unpad]
-            final_evids = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li for
-                           sub_li in final_evid_unpad]
-            final_titles = [sub_li.extend([''] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li for
-                           sub_li in final_title_unpad]
-            final_scores = [sub_li.extend([1e-10] * (args.top_k - len(sub_li))) if len(sub_li) != args.top_k else sub_li
-                           for sub_li in final_score_unpad]
 
             # Prune final-answers:
-            #   Each query had top-k best append and for topk best append, we find another topk (total = top_k*top_k)
+            #   Each query had topk' best append and for topk' best append, we find another topk (total = topk'*topk)
             fh_data, final_data = (fh_preds, fh_scores, fh_titles, fh_evids), \
                                   (final_predictions, final_scores, final_titles, final_evids)
             topk_final_preds, topk_chain_scores, topk_final_titles, \
