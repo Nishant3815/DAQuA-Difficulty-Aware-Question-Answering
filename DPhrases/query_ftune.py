@@ -357,6 +357,20 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
                 for i, q in enumerate(questions):
+
+                    # Account for easy questions below
+                    if levels[i]=='easy':
+                        upd_q_id = q_ids[i] + "_uc"
+                        upd_level = levels[i]
+                        upd_evidence = ''
+                        upd_evidence_title = ''
+                        upd_answer = final_answers[i]
+                        upd_answer_title = final_titles[i]
+                        upd_queries.append(
+                            (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
+                        )
+
+                    # Account for non-easy level questions
                     for t in tgts_t[i][:args.top_k]:
                         t = int(t.item())
                         upd_q_id = q_ids[i] + f"_{t}"
