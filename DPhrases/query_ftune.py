@@ -402,7 +402,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 for i, q in enumerate(questions):
 
                     # Account for easy questions below
-                    if len(tgts_t[i])==0:
+                    if levels[i]=='easy':
                         upd_q_id = q_ids[i] + "_uc"
                         upd_level = levels[i]
                         upd_evidence = ''
