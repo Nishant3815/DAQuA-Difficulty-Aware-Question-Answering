@@ -110,11 +110,18 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent,
                 prune_low_preds=False
             )
-            prediction = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
-            evidence = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
-            title = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in result]
-            score = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in result]
+            prediction_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
+            evidence_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [''] for out in result]
+            title_unpad = [[ret['title'] for ret in out][:args.top_k] if len(out) > 0 else [['']] for out in result]
+            score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [-1e10] for out in result]
             # se_pos = [[(ret['start_pos'], ret['end_pos']) for ret in out][:args.top_k] if len(out) > 0 else [(0,0)] for out in result]
+
+            # Pad answers, titles and scores if length of sublist is less than top_k
+            prediction = [sub_li + [''] * (args.top_k - len(sub_li)) for sub_li in prediction_unpad]
+            evidence = [sub_li + [''] * (args.top_k - len(sub_li)) for sub_li in evidence_unpad]
+            title = [sub_li + [['']] * (args.top_k - len(sub_li)) for sub_li in title_unpad]
+            score = [sub_li + [1e-10] * (args.top_k - len(sub_li)) for sub_li in score_unpad]
+
             predictions += prediction
             pred_evids += evidence
             pred_titles += title
@@ -123,9 +130,9 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         # logger.info(f"Avg. {sum(mips.num_docs_list)/len(mips.num_docs_list):.2f} number of docs per query")
         # Check multihop flag value below
         eval_fn = evaluate_results if not args.is_kilt else evaluate_results_kilt
-        return eval_fn(predictions, qids, questions, gold_answers, gold_titles, args, pred_evids, scores,
-                       pred_titles, firsthop=firsthop, save_pred=save_pred, pred_fname_suffix=pred_fname_suffix,
-                       data_path=data_path, save_path=save_path)
+        return eval_fn(predictions, qids, questions, to_arr(gold_answers, d=2), to_arr(gold_titles, d=2), args,
+                       pred_evids, scores, to_arr(pred_titles, d=3), firsthop=firsthop, save_pred=save_pred,
+                       pred_fname_suffix=pred_fname_suffix, data_path=data_path, save_path=save_path)
 
     # Evaluation for multi-hop scenario
 
@@ -179,14 +186,20 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                                        aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True,
                                        prune_low_preds=False)
 
-            final_predictions = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                 final_result]
-            final_evids = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_evid_unpad = [[ret['context'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                 final_result]
-            final_titles = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_title_unpad = [[ret['title'][0] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                  final_result]
-            final_scores = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
+            final_score_unpad = [[ret['score'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
                                  final_result]
+
+            # Pad answers, titles and scores if length of sublist is less than top_k
+            final_predictions = [sub_li + [''] * (args.top_k - len(sub_li)) for sub_li in final_pred_unpad]
+            final_evids = [sub_li + [''] * (args.top_k - len(sub_li)) for sub_li in final_evid_unpad]
+            final_titles = [sub_li + [''] * (args.top_k - len(sub_li)) for sub_li in final_title_unpad]
+            final_scores = [sub_li + [1e-10] * (args.top_k - len(sub_li)) for sub_li in final_score_unpad]
 
             # Prune final-answers:
             #   Each query had topk' best append and for topk' best append, we find another topk (total = topk'*topk)

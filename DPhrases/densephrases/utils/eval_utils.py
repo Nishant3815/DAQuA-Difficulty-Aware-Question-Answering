@@ -63,7 +63,8 @@ def drqa_exact_match_score(prediction, ground_truth):
 
 def drqa_substr_match_score(prediction, ground_truth):
     """Check if the prediction is a (soft) substring match with the ground truth."""
-    return normalize_answer(prediction) in normalize_answer(ground_truth)
+    norm_pred = normalize_answer(prediction)
+    return norm_pred != '' and norm_pred in normalize_answer(ground_truth)
 
 
 def drqa_substr_exact_match_score(pred_substr, pred_exact, ground_truth):
