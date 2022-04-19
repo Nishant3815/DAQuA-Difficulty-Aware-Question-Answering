@@ -89,8 +89,8 @@ def shuffle_data(data, args):
             logger.info("{args.data_sub} fraction of dataset selected for run")
         else:
             assert (args.data_sub <=len(qa_pairs))
-            qa_pairs_set = qa_pairs[:int(args.data_sub)]
-            logger.info("{args.data_sub} number of dataset instances selected for run")
+            qa_pairs_set = qa_pairs[:args.data_sub]
+            logger.info("{} number of dataset instances selected for run")
     q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
     return q_ids, levels, questions, answers, titles, final_answers, final_titles
 
