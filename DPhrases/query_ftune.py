@@ -534,7 +534,7 @@ def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encod
     step = batch_size
     search_fn = mips.search
     query2vec = get_query2vec(
-        query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size
+        query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size, silent=True
     )
     for q_idx in tqdm(range(0, len(questions), step)):
         outs = query2vec(questions[q_idx:q_idx + step])  # outs[0] contains (start_vec_list, end_vec_list, query_tokens)
