@@ -73,9 +73,22 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                                                                                                          args,
                                                                                                          q_idx,
                                                                                                          multihop=True)
-        # Skip "easy questions" during evaluation
+        # Skip "easy" questions during evaluation
         if args.filter_easy:
-            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if lev!='easy']
+            logger.info("Filtering easy questions")
+            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
+                      (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
+                      zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if
+                      lev != 'easy']
+            qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
+
+        # Skip "yes/no" questions during evaluation
+        if multihop and args.filter_yn:
+            logger.info("Filtering yes/no questions")
+            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
+                      (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
+                      zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if
+                      all([g.lower() not in ['yes', 'no'] for g in gold_ans])]
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)

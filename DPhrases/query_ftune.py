@@ -188,14 +188,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # End vectors
                 evs_t = torch.Tensor(evs).to(device)
 
-                # Update tgt and p_tgt to filter out loss contributions from easy questions
-                tgts_res = [[None]*len(tgt) if lev=='easy' else tgt for tgt, lev in zip(tgts, levels)]
-                p_tgts_res = [[None]*len(p_tgt) if lev=='easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
-
                 # Target indices for phrases
-                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_res]
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
                 # Target indices for doc
-                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts_res]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
 
                 # Train query encoder
                 assert len(train_dataloader) == 1
@@ -346,20 +342,22 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 evs_t = torch.Tensor(evs).to(device)
 
                 # Update tgt and p_tgt to filter out loss contributions from easy questions 
-                tgts_res = [[None] * len(tgt) if lev == 'easy' else tgt for tgt, lev in zip(tgts, levels)]
-                p_tgts_res = [[None] * len(p_tgt) if lev == 'easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+                tgts = [[None] * len(tgt) if lev == 'easy' else tgt for tgt, lev in zip(tgts, levels)]
+                p_tgts = [[None] * len(p_tgt) if lev == 'easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
 
                 # Target indices for phrases
-                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts_res]
+                tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
                 # Target indices for doc
-                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts_res]
+                p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
 
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
                 for i, q in enumerate(questions):
-
-                    # Account for easy questions below
-                    if levels[i]=='easy':
+                    # Skip "yes/no" questions
+                    if any([a.lower() in ['yes', 'no'] for a in final_answers[i]]):
+                        continue
+                    # Retain the original query text for "easy" questions (i.e. store empty evidence)
+                    if levels[i] == 'easy':
                         upd_q_id = q_ids[i] + "_uc"
                         upd_level = levels[i]
                         upd_evidence = ''
@@ -369,22 +367,22 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         upd_queries.append(
                             (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                         )
-
-                    # Account for non-easy level questions
-                    for t in tgts_t[i][:args.top_k]:
-                        t = int(t.item())
-                        upd_q_id = q_ids[i] + f"_{t}"
-                        upd_level = levels[i]
-                        upd_evidence = outs[i][t]['answer']
-                        upd_evidence_title = outs[i][t]['title'][0]
-                        upd_answer = final_answers[i]
-                        upd_answer_title = final_titles[i]
-                        upd_queries.append(
-                            (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
-                        )
+                    else:
+                        # Track first-hop evidence for non-"easy" questions
+                        for t in tgts_t[i][:args.top_k]:
+                            t = int(t.item())
+                            upd_q_id = q_ids[i] + f"_{t}"
+                            upd_level = levels[i]
+                            upd_evidence = outs[i][t]['answer']
+                            upd_evidence_title = outs[i][t]['title'][0]
+                            upd_answer = final_answers[i]
+                            upd_answer_title = final_titles[i]
+                            upd_queries.append(
+                                (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
+                            )
 
                 # Train query encoder
-                assert len(train_dataloader) == 1  # TODO: Why was this there in the original code?
+                assert len(train_dataloader) == 1
                 for batch in train_dataloader:
                     batch = tuple(t.to(device) for t in batch)
                     fhop_loss, accs = target_encoder.train_query(
