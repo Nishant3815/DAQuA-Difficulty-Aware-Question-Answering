@@ -72,25 +72,22 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                                                                                                          args,
                                                                                                          q_idx,
                                                                                                          multihop=True)
-        qa_pairs = list(zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles))
-        
-        if not args.data_sub:
-            logger.info("Full Dataset selected for run")
-        else:
-            qa_pairs_set = qa_pairs
-            if args.data_sub < 1:
-                assert (args.data_sub >= 0)
-                sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
-                qa_pairs_set = qa_pairs[:sub_val]
-                logger.info("{args.data_sub} fraction of dataset selected for run")
-            else:
-                assert (args.data_sub <=len(qa_pairs))
-                qa_pairs_set = qa_pairs[:int(args.data_sub)]
-                logger.info("{args.data_sub} number of dataset instances selected for run")
-            qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qa_pairs_set)
-        # Skip "easy questions" during evaluation
+        # Skip "easy" questions during evaluation
         if args.filter_easy:
-            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in zip(*qa_pairs_set) if lev!='easy']
+            logger.info("Filtering easy questions")
+            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
+                      (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
+                      zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if
+                      lev != 'easy']
+            qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
+
+        # Skip "yes/no" questions during evaluation
+        if multihop and args.filter_yn:
+            logger.info("Filtering yes/no questions")
+            qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
+                      (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
+                      zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if
+                      all([g.lower() not in ['yes', 'no'] for g in gold_ans])]
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
