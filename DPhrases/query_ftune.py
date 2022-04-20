@@ -611,7 +611,7 @@ def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encod
     query2vec = get_query2vec(
         query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size, silent=True
     )
-    for q_idx in tqdm(range(0, len(questions), step)):
+    for q_idx in range(0, len(questions), step):
         outs = query2vec(questions[q_idx:q_idx + step])  # outs[0] contains (start_vec_list, end_vec_list, query_tokens)
         start = np.concatenate([out[0] for out in outs], 0)
         end = np.concatenate([out[1] for out in outs], 0)
