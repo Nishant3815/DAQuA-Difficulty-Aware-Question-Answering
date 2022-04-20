@@ -382,14 +382,16 @@ def write_filter(all_examples, all_features, all_results, tokenizer, hdf5_path, 
         out_p.join()
 
 
-def get_question_results(question_examples, query_eval_features, question_dataloader, device, model, batch_size):
+def get_question_results(question_examples, query_eval_features, question_dataloader, device, model, batch_size,
+                         silent=False):
     id2feature = {feature.unique_id: feature for feature in query_eval_features}
     id2example = {id_: question_examples[id2feature[id_].example_index] for id_ in id2feature}
 
     def to_numpy(tensor):
         return tensor.detach().cpu().numpy()
 
-    for batch in tqdm(question_dataloader, desc="Evaluating", disable=True):
+    iterator = question_dataloader if silent else tqdm(question_dataloader, desc="Evaluating", disable=True)
+    for batch in iterator:
         model.eval()
         batch = tuple(t.to(device) for t in batch)
         assert len(batch) == 4

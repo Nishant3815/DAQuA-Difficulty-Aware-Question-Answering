@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def embed_all_query(questions, args, query_encoder, tokenizer, batch_size=64, silent=False):
     query2vec = get_query2vec(
-        query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size
+        query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size, silent=silent
     )
 
     all_outs = []
@@ -39,7 +39,8 @@ def embed_all_query(questions, args, query_encoder, tokenizer, batch_size=64, si
     start = np.concatenate([out[0] for out in all_outs], 0)
     end = np.concatenate([out[1] for out in all_outs], 0)
     query_vec = np.concatenate([start, end], 1)
-    logger.info(f'Query reps: {query_vec.shape}')
+    if not silent:
+        logger.info(f'Query reps: {query_vec.shape}')
     return query_vec
 
 
@@ -319,7 +320,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         if i < 3:
             logger.info(f'{i+1}) {questions[i]}')
             logger.info(
-                f'=> groundtruths: {list(zip(titles[i], answers[i]))}, top 5 prediction: {predictions[i][:5]}, ' +
+                f'=> groundtruths title/ans: {list(zip(titles[i], answers[i]))}, top 5 prediction: {predictions[i][:5]}, ' +
                 f'top 5 title/evidence: {list(zip(pred_titles[i][:5], pred_evids[i][:5]))}')
 
         match_fn = drqa_regex_match_score if args.regex else \

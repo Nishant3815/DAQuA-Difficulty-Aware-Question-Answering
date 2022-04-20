@@ -80,14 +80,15 @@ def load_cross_encoder(device, args):
     return ce_model, tokenizer
 
 
-def get_query2vec(query_encoder, tokenizer, args, batch_size=64):
+def get_query2vec(query_encoder, tokenizer, args, batch_size=64, silent=False):
     device = 'cuda' if args.cuda else 'cpu'
     def query2vec(queries):
         question_dataloader, question_examples, query_features = get_question_dataloader(
             queries, tokenizer, args.max_query_length, batch_size=batch_size
         )
         question_results = get_question_results(
-            question_examples, query_features, question_dataloader, device, query_encoder, batch_size=batch_size
+            question_examples, query_features, question_dataloader, device, query_encoder, batch_size=batch_size,
+            silent=silent
         )
         if args.verbose_logging:
             logger.info(f"{len(query_features)} queries: {' '.join(query_features[0].tokens_)}")
