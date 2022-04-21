@@ -190,6 +190,7 @@ class Options():
         self.parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
         self.parser.add_argument('--label_strat', default='phrase', type=str,
                                  help="label strat={phrase|doc|phrase,doc}")
+        self.parser.add_argument("--wandb", action="store_true", help="Enable Wandb logging.")
         ############# Multi-hop ##############
         self.parser.add_argument("--num_firsthop_epochs", type=int, default=1,
                                  help="Number of warmup epochs to train model for first hop retrieval")

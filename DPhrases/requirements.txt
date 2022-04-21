@@ -13,3 +13,6 @@ flask
 flask_cors
 tornado
 requests-futures
+wandb 
+pytorch_lightning 
+torch_tb_profiler
