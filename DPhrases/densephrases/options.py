@@ -83,7 +83,6 @@ class Options():
         self.parser.add_argument("--truecase_path", type=str, default='truecase/english_with_questions.dist')
         self.parser.add_argument("--truecase", action="store_true", help="Dummy (automatic truecasing supported)")
         self.parser.add_argument("--data_sub", type=float, default=None, help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
-        self.parser.add_argument("--filter_easy", action='store_true', default=False)
 
     # Reading comprehension (single-passage training) options
     def add_rc_options(self):
@@ -152,7 +151,6 @@ class Options():
 
     def add_retrieval_options(self):
         self.parser.add_argument('--run_mode', default='eval', help="eval | train_query")
-        self.parser.add_argument('--hop_top_k', type=int, default=50)
         self.parser.add_argument('--top_k', type=int, default=10)
         self.parser.add_argument('--nprobe', type=int, default=256)
         self.parser.add_argument('--aggregate', action='store_true', default=False)
@@ -216,6 +214,11 @@ class Options():
         self.parser.add_argument("--joint_loss_lambda", default=0.4, type=float,
                                  help="Weight to assign to first-hop loss; (1-lambda) will be assigned to second-hop")
         self.parser.add_argument("--skip_warmup_dev_eval", action="store_true", help="Skip dev eval for warmup training")
+        self.parser.add_argument('--hop_top_k', type=int, default=10, help="Number of candidates to search for during eval")
+        self.parser.add_argument("--filter_easy", action='store_true', default=False,
+                                 help="Drop questions that have difficulty level marked as 'easy'")
+        self.parser.add_argument("--filter_yn", action='store_true', default=False,
+                                 help="Drop questions that have yes/no as the gold answer")
 
 
     def add_demo_options(self):
