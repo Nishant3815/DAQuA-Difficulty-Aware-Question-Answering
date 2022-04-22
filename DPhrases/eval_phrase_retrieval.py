@@ -286,7 +286,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         ems.append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
     final_f1, final_em = np.mean(f1s), np.mean(ems)
     if not args.regex:
-        logger.info('EM: %.2f, F1: %.2f' % (final_em * 100, final_f1 * 100))
+        logger.info(f'EM: {final_em * 100:.2f}%, F1: {final_f1:.2f}%')
 
     # Top 1/k em (or regex em)
     exact_match_topk = 0
@@ -423,27 +423,27 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
     total = len(predictions)
     exact_match_top1 = 100.0 * exact_match_top1 / total
     f1_score_top1 = 100.0 * f1_score_top1 / total
-    logger.info({f'{phr_metric}_top1': exact_match_top1, 'f1_score_top1': f1_score_top1})
+    logger.info({f'{phr_metric}_top1': f'{exact_match_top1} %', 'f1_score_top1': f'{f1_score_top1} %'})
     exact_match_topk = 100.0 * exact_match_topk / total
     f1_score_topk = 100.0 * f1_score_topk / total
-    logger.info({f'{phr_metric}_top{args.top_k}': exact_match_topk, f'f1_score_top{args.top_k}': f1_score_topk})
+    logger.info({f'{phr_metric}_top{args.top_k}': f'{exact_match_topk} %', f'f1_score_top{args.top_k}': f'{f1_score_topk} %'})
     redundant_topk = redundant_topk / total
     logger.info({f'redundancy of top{args.top_k}': redundant_topk})
     if firsthop:
         # Add evidence metrics
         evid_exact_match_top1 = 100.0 * evid_exact_match_top1 / total
         evid_f1_score_top1 = 100.0 * evid_f1_score_top1 / total
-        logger.info({'evid_em_top1': evid_exact_match_top1, 'evid_f1_score_top1': evid_f1_score_top1})
+        logger.info({'evid_em_top1': f'{evid_exact_match_top1} %', 'evid_f1_score_top1': f'{evid_f1_score_top1} %'})
         evid_exact_match_topk = 100.0 * evid_exact_match_topk / total
         evid_f1_score_topk = 100.0 * evid_f1_score_topk / total
         logger.info(
-            {f'evid_em_top{args.top_k}': evid_exact_match_topk, f'evid_f1_score_top{args.top_k}': evid_f1_score_topk})
+            {f'evid_em_top{args.top_k}': f'{evid_exact_match_topk} %', f'evid_f1_score_top{args.top_k}': f'{evid_f1_score_topk} %'})
 
         # Add joint metrics
         total_phr_substr_evid_f1_top1 = 100.0 * total_phr_substr_evid_f1_top1 / total
         total_phr_substr_evid_f1_topk = 100.0 * total_phr_substr_evid_f1_topk / total
-        logger.info({'phr_substr_evid_f1_top1': total_phr_substr_evid_f1_top1,
-                     f'total_phr_substr_evid_f1_top{args.top_k}': total_phr_substr_evid_f1_topk})
+        logger.info({'phr_substr_evid_f1_top1': f'{total_phr_substr_evid_f1_top1} %',
+                     f'phr_substr_evid_f1_top{args.top_k}': f'{total_phr_substr_evid_f1_topk} %'})
 
     # Store aggregated metrics in a separate file
     agg_pred_out = {
