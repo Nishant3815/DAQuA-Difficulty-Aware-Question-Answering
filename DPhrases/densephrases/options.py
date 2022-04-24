@@ -212,7 +212,7 @@ class Options():
         self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
                                  help="Metric to decide best epoch for warmup training: phrase | evidence | joint")
         self.parser.add_argument('--dev_metric', default='phrase', type=str,
-                                 help="Metric to decide best epoch for joint training: phrase | <TBD>")
+                                 help="Metric to decide best epoch for joint training: phrase | phrase_k | <TBD>")
         self.parser.add_argument("--chain_score_op", default='sum', type=str,
                                  help="Aggregation operator to use for combining scores from different hops: sum | prod")
         self.parser.add_argument("--joint_loss_lambda", default=0.4, type=float,
