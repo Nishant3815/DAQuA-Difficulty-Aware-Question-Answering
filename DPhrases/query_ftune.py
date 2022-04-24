@@ -30,6 +30,14 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def make_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+def save_model(model, path):
+    make_dir(path)
+    model.save_pretrained(path)
+
 def setup_run():
     # See options in densephrases.options
     options = Options()
@@ -86,17 +94,17 @@ def shuffle_data(data, args):
     # Subset data for tuning (if required)
     if not args.data_sub:
         qa_pairs_set = qa_pairs
-        logger.info("Full Dataset selected for run")
+        logger.info("Subsetting: Full dataset selected for run")
     else:
         if args.data_sub < 1:
             assert (args.data_sub >= 0)
             sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
             qa_pairs_set = qa_pairs[:sub_val]
-            logger.info("{args.data_sub} fraction of dataset selected for run")
+            logger.info(f"Subsetting: {args.data_sub} fraction ({sub_val} instances) selected for run")
         else:
-            assert (args.data_sub <=len(qa_pairs))
+            assert (args.data_sub <= len(qa_pairs))
             qa_pairs_set = qa_pairs[:int(args.data_sub)]
-            logger.info("{args.data_sub} number of dataset instances selected for run")
+            logger.info(f"Subsetting: {args.data_sub} instances selected for run")
 
     q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
     return q_ids, levels, questions, answers, titles, final_answers, final_titles
@@ -162,6 +170,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
         target_encoder, optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
                                                                        len(dev_qa_pairs[1]),
                                                                        args.num_firsthop_epochs)
+
+        # Initially, save pre-trained model as the best model
+        save_model(target_encoder, save_path)
+        save_model(target_encoder, os.path.join(save_path, "warmup_ep0"))
 
         # Warm-up the model with a first-hop retrieval objective
         for ep_idx in range(int(args.num_firsthop_epochs)):
@@ -238,7 +250,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                         if args.wandb:
                             wandb.log({
-                                "warmup_train/Epoch": ep_idx + 1,
+                                "warmup_train/epoch": ep_idx + 1,
                                 "warmup_train/avg_train_loss": total_loss / (step_idx + 1),
                                 "warmup_train/acc@1": sum(total_accs) / len(total_accs),
                                 f"warmup_train/acc@{args.top_k}": sum(total_accs_k) / len(total_accs_k)}
@@ -257,6 +269,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 f"acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
             )
 
+            # Save epoch model
+            save_model(target_encoder, os.path.join(save_path, f"warmup_ep{ep_idx + 1}"))
+
             if not args.skip_warmup_dev_eval:
                 # Dev evaluation
                 print("\n")
@@ -264,9 +279,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 print("\n")
                 new_args = copy.deepcopy(args)
                 new_args.top_k = 10
-                new_args.save_pred = False
                 new_args.test_path = args.dev_path
-                eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True)
+                eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True,
+                                    pred_fname_suffix=f"warmup_{ep_idx + 1}", save_path=save_path,
+                                    save_pred=True)
                 dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
                 evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = eval_res[1]
                 joint_substr_f1, joint_substr_f1k = eval_res[2]
@@ -282,22 +298,27 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                 if args.wandb:
                     wandb.log({
-                        "warmup_dev_eval/Epoch": ep_idx + 1,
+                        "warmup_dev_eval/epoch": ep_idx + 1,
                         "warmup_dev_eval/dev_acc@1": dev_em,
                         "warmup_dev_eval/dev_f1@1": dev_f1,
+                        f"warmup_dev_eval/dev_acc@{new_args.top_k}": dev_emk,
+                        f"warmup_dev_eval/dev_f1@{new_args.top_k}": dev_f1k,
                         "warmup_dev_eval/dev_evidence_acc@1": evid_dev_em,
                         "warmup_dev_eval/dev_evidence_f1@1": evid_dev_f1,
-                        "warmup_dev_eval/dev_set_joint_f1@1": joint_substr_f1}
-                    )
+                        f"warmup_dev_eval/dev_evidence_acc@{new_args.top_k}": evid_dev_emk,
+                        f"warmup_dev_eval/dev_evidence_f1@{new_args.top_k}": evid_dev_f1k,
+                        "warmup_dev_eval/dev_set_joint_f1@1": joint_substr_f1,
+                        f"warmup_dev_eval/dev_set_joint_f1@{new_args.top_k}": joint_substr_f1k
+                    })
 
                 # Save best model
                 if dev_metrics[args.warmup_dev_metric] > best_acc:
                     best_acc = dev_metrics[args.warmup_dev_metric]
-                    best_epoch = ep_idx
-                    target_encoder.save_pretrained(save_path)
-                    logger.info(f"Saved best model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
+                    best_epoch = ep_idx + 1
+                    save_model(target_encoder, save_path)
+                    logger.info(f"Saved best warmup model with ({args.warmup_dev_metric}) acc. {best_acc:.3f} into {save_path}")
             else:
-                target_encoder.save_pretrained(save_path)
+                save_model(target_encoder, save_path)
         print()
         if best_acc > 0:
             logger.info(f"Best model (epoch {best_epoch}) with accuracy {best_acc:.3f} saved at {save_path}")
@@ -315,19 +336,33 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             args.load_dir = save_path
             target_encoder, tokenizer, _ = load_encoder(device, args)
             best_acc = -1000.0
-            best_epoch = -1
+            best_epoch = 0
             # If warmup was executed, run dev eval before starting joint training
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
-            new_args.save_pred = False
             new_args.test_path = args.dev_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True)
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True,
+                                                        pred_fname_suffix="joint_ep0", save_path=save_path,
+                                                        save_pred=True)
             # Dev metric to use for picking the best epoch
             dev_metrics = {
                 "phrase": dev_em,
+                "phrase_k": dev_emk,
             }
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
+            if args.wandb:
+                wandb.log({
+                    "joint_dev_eval/epoch": 0,
+                    "joint_dev_eval/acc@1": dev_em,
+                    "joint_dev_eval/f1@1": dev_f1,
+                    f"joint_dev_eval/acc@{new_args.top_k}": dev_emk,
+                    f"joint_dev_eval/f1@{new_args.top_k}": dev_f1k
+                })
+        else:
+            # Initially, save pre-trained model as the best model
+            save_model(target_encoder, save_path)
+            save_model(target_encoder, os.path.join(save_path, f"joint_ep0"))
 
 
         # Initialize optimizer & scheduler
@@ -345,7 +380,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_accs_k = []
             total_u_accs = []
             total_u_accs_k = []
-            n_hop2_skipped = 0.  # Track how many second hops skipped over all iterations in an epoch
+            n_hop1_skipped = 0.  # Track how many first hops skipped
+            n_hop2_skipped = 0.  # Track how many second hops skipped
 
             # Get questions and corresponding answers with other metadata
             q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
@@ -382,12 +418,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
+                hop1_skip_cnt = 0.
                 for i, q in enumerate(questions):
                     # Skip "yes/no" questions
-                    if any([a.lower() in ['yes', 'no'] for a in final_answers[i]]):
+                    if final_answers[i].replace('.', '').lower() in ['yes', 'no']:
                         continue
                     # Retain the original query text for "easy" questions (i.e. store empty evidence)
                     if levels[i] == 'easy':
+                        hop1_skip_cnt += 1
                         upd_q_id = q_ids[i] + "_uc"
                         upd_level = levels[i]
                         upd_evidence = ''
@@ -410,6 +448,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             upd_queries.append(
                                 (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                             )
+                hop1_skip_cnt /= len(questions)
+                n_hop1_skipped += hop1_skip_cnt
 
                 # Train query encoder
                 assert len(train_dataloader) == 1
@@ -496,7 +536,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                 print()
                                 logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid ans)")
                                 loss = fhop_loss
-                                ans_loss = torch.tensor(float('inf'))
+                                ans_loss = torch.tensor(0)
                             else:
                                 # Average ans_loss over total number of original questions
                                 ans_loss = sum(u_loss_arr) / (upd_step_idx + 1)
@@ -509,14 +549,20 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             print()
                             logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid evidence)")
                             loss = fhop_loss
-                            ans_loss = torch.tensor(float('inf'))
+                            ans_loss = torch.tensor(0)
 
                         # Backpropagate combined loss and update model
-                        if args.fp16:
-                            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                                scaled_loss.backward()
-                        else:
-                            loss.backward()
+                        try:
+                            if args.fp16:
+                                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                                    scaled_loss.backward()
+                            else:
+                                loss.backward()
+                        except:
+                            logger.info("ERROR: loss.backward()")
+                            logger.info(f"Number of updated queries: {len(upd_queries)}")
+                            raise ValueError("loss.backward()")
+
                         total_loss += loss.item()
                         if args.fp16:
                             torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -534,16 +580,17 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                         if args.wandb:
                             wandb.log({
-                                "joint_train/Epoch": ep_idx + 1,
-                                "joint_train/avg_first_hop_loss": fhop_loss.item(),
-                                "joint_train/avg_second_hop_loss": ans_loss.item(),
-                                "joint_train/avg_joint_loss": loss.item(),
+                                "joint_train/epoch": ep_idx + 1,
+                                "joint_train/first_hop_loss": fhop_loss.item(),
+                                "joint_train/second_hop_loss": float('inf') if hop2_skipped else ans_loss.item(),
+                                "joint_train/joint_loss": loss.item(),
                                 "joint_train/avg_total_loss": total_loss / (step_idx + 1),
                                 "joint_train/first_hop_acc@1": np.mean(total_accs),
                                 f"joint_train/first_hop_acc@{args.top_k}": np.mean(total_accs_k),
                                 "joint_train/second_hop_acc@1": np.mean(total_u_accs),
                                 f"joint_train/second_hop_acc@{args.top_k}": np.mean(total_u_accs_k),
-                                f"joint_train/second_hop_skipped": n_hop2_skipped / (step_idx + 1)
+                                f"joint_train/first_hop_skipped": n_hop1_skipped / (step_idx + 1),
+                                f"joint_train/second_hop_skipped": n_hop2_skipped / (step_idx + 1),
                             })
 
 
@@ -566,12 +613,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             print("\n")
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
-            new_args.save_pred = False
             new_args.test_path = args.dev_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True)
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True,
+                                                        pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
+                                                        save_pred=True)
             # Warm-up dev metric to use for picking the best epoch
             dev_metrics = {
                 "phrase": dev_em,
+                "phrase_k": dev_emk,
                 # TODO: Add any other dev metrics for joint training?
                 # TODO: Remove duplication of this code block (I think there are 3 of these in this file)
             }
@@ -579,16 +628,20 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             if args.wandb:
                 wandb.log({
-                    "joint_dev_eval/Epoch": ep_idx + 1,
-                    "joint_dev_eval/dev_acc@1": dev_em,
-                    "joint_dev_eval/dev_f1@1": dev_f1}
-                )
+                    "joint_dev_eval/epoch": ep_idx + 1,
+                    "joint_dev_eval/acc@1": dev_em,
+                    "joint_dev_eval/f1@1": dev_f1,
+                    f"joint_dev_eval/acc@{new_args.top_k}": dev_emk,
+                    f"joint_dev_eval/f1@{new_args.top_k}": dev_f1k
+                })
 
+            # Save epoch model
+            save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
             # Save best model
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
-                best_epoch = ep_idx
-                target_encoder.save_pretrained(save_path)
+                best_epoch = ep_idx + 1
+                save_model(target_encoder, save_path)
                 logger.info(f"Saved best model with ({args.dev_metric}) acc. {best_acc:.3f} into {save_path}")
                 if args.wandb:
                     wandb.run.summary["best_accuracy_joint"] = best_acc
@@ -740,7 +793,7 @@ if __name__ == '__main__':
                 print()
                 if not args.skip_warmup:
                     # Evaluate warmup (first-hop) stage
-                    res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="pretrain_warmup",
+                    res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="warmup_ep0",
                                    data_path=paths_to_eval[split], save_path=save_path)
                     if split == 'dev':
                         dev_metrics = {
@@ -749,17 +802,43 @@ if __name__ == '__main__':
                             "joint": res[2][0]  # phr_substr_evid_f1_top1: joint metric @ 1 on the dev set
                         }
                         init_dev_acc = dev_metrics[args.warmup_dev_metric]
-                if not args.warmup_only:
+                        if args.wandb:
+                            dev_em, dev_f1, dev_emk, dev_f1k = res[0]
+                            evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = res[1]
+                            joint_substr_f1, joint_substr_f1k = res[2]
+                            wandb.log({
+                                "warmup_dev_eval/epoch": 0,
+                                "warmup_dev_eval/dev_acc@1": dev_em,
+                                "warmup_dev_eval/dev_f1@1": dev_f1,
+                                f"warmup_dev_eval/dev_acc@{args.top_k}": dev_emk,
+                                f"warmup_dev_eval/dev_f1@{args.top_k}": dev_f1k,
+                                "warmup_dev_eval/dev_evidence_acc@1": evid_dev_em,
+                                "warmup_dev_eval/dev_evidence_f1@1": evid_dev_f1,
+                                f"warmup_dev_eval/dev_evidence_acc@{args.top_k}": evid_dev_emk,
+                                f"warmup_dev_eval/dev_evidence_f1@{args.top_k}": evid_dev_f1k,
+                                "warmup_dev_eval/dev_set_joint_f1@1": joint_substr_f1,
+                                f"warmup_dev_eval/dev_set_joint_f1@{args.top_k}": joint_substr_f1k
+                            })
+                else:
                     # Evaluate joint (multi-hop) stage
-                    res = evaluate(args, mips, multihop=True, save_pred=True, pred_fname_suffix="pretrain_joint",
+                    res = evaluate(args, mips, multihop=True, save_pred=True, pred_fname_suffix="joint_ep0",
                                    data_path=paths_to_eval[split], save_path=save_path)
-                    if args.skip_warmup:
-                        # If skipping warmup training, initialize dev acc with the joint eval
-                        if split == 'dev':
-                            dev_metrics = {
-                                "phrase": res[0],  # phr_em_top1: phrase metric @1 on the dev set
-                            }
-                            init_dev_acc = dev_metrics[args.dev_metric]
+                    # If skipping warmup training, initialize dev acc with the joint eval
+                    if split == 'dev':
+                        dev_metrics = {
+                            "phrase": res[0],  # phr_em_top1: phrase metric @1 on the dev set
+                            "phrase_k": res[2],  # phr_em_topk: phrase metric @k on the dev set
+                        }
+                        init_dev_acc = dev_metrics[args.dev_metric]
+                        if args.wandb:
+                            dev_em, dev_f1, dev_emk, dev_f1k = res
+                            wandb.log({
+                                "joint_dev_eval/epoch": 0,
+                                "joint_dev_eval/acc@1": dev_em,
+                                "joint_dev_eval/f1@1": dev_f1,
+                                f"joint_dev_eval/acc@{args.top_k}": dev_emk,
+                                f"joint_dev_eval/f1@{args.top_k}": dev_f1k
+                            })
                 print("\n\n")
 
         # Train
