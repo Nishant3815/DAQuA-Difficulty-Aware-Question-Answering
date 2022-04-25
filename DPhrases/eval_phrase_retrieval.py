@@ -277,19 +277,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
     logger.info(f'no_ans/all: {no_ans}, {len(top1_preds)}')
     logger.info(f'Evaluating {len(top1_preds)} answers')
 
-    # Get em/f1
-    f1s, ems = [], []
-    for prediction, groundtruth in zip(top1_preds, answers):
-        if len(groundtruth) == 0:
-            f1s.append(0)
-            ems.append(0)
-            continue
-        f1s.append(max([f1_score(prediction, gt)[0] for gt in groundtruth]))
-        ems.append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
-    final_f1, final_em = np.mean(f1s), np.mean(ems)
-    if not args.regex:
-        logger.info(f'EM: {final_em * 100:.2f}%, F1: {final_f1:.2f}%')
-
     # Top 1/k em (or regex em)
     exact_match_topk = 0
     exact_match_top1 = 0
@@ -719,12 +706,14 @@ def extract_top_pred_chains(fh_data, final_data, args):
     st_idx_li = []
     en_idx_li = []
     val_topk = args.top_k
+    pred_fn = normalize_answer if not args.no_eval_norm else lambda x: x
     for s_idx, e_idx in ranked_pairs:
-        if final_pred_arr[s_idx, e_idx] not in covered and val_topk:
+        fp = pred_fn(final_pred_arr[s_idx, e_idx])
+        if fp not in covered and val_topk:
             val_topk -= 1
             st_idx_li.append(s_idx)
             en_idx_li.append(e_idx)
-            covered.add(final_pred_arr[s_idx, e_idx])
+            covered.add(fp)
 
     # Get final top-k answers, titles and phrases
     topk_chain_scores = path_scores[st_idx_li, en_idx_li]
