@@ -225,6 +225,8 @@ class Options():
                                  help="Drop questions that have difficulty level marked as 'easy'")
         self.parser.add_argument("--filter_yn", action='store_true', default=False,
                                  help="Drop questions that have yes/no as the gold answer")
+        self.parser.add_argument("--no_eval_norm", action='store_true', default=False,
+                                 help="Prevent answer normalization for predictions during evaluation")
 
 
     def add_demo_options(self):
