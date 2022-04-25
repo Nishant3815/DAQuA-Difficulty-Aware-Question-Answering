@@ -177,3 +177,25 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
         return q_ids, levels, questions, answers, titles, final_answers, final_titles
     return q_ids, levels, questions, answers, titles
 
+
+def shuffle_data(data, args):
+    q_ids, levels, questions, answers, titles, final_answers, final_titles = data
+    qa_pairs = list(zip(q_ids, levels, questions, answers, titles, final_answers, final_titles))
+    random.shuffle(qa_pairs)
+    # Subset data for tuning (if required)
+    if not args.data_sub:
+        qa_pairs_set = qa_pairs
+        logger.info("Subsetting: Full dataset selected for run")
+    else:
+        if args.data_sub < 1:
+            assert (args.data_sub >= 0)
+            sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
+            qa_pairs_set = qa_pairs[:sub_val]
+            logger.info(f"Subsetting: {args.data_sub} fraction ({sub_val} instances) selected for run")
+        else:
+            assert (args.data_sub <= len(qa_pairs))
+            qa_pairs_set = qa_pairs[:int(args.data_sub)]
+            logger.info(f"Subsetting: {args.data_sub} instances selected for run")
+
+    q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
+    return q_ids, levels, questions, answers, titles, final_answers, final_titles

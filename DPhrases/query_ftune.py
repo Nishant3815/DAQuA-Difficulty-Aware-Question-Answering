@@ -13,7 +13,7 @@ from IPython import embed
 
 from densephrases.utils.squad_utils import get_question_dataloader
 from densephrases.utils.single_utils import load_encoder
-from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
+from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs, shuffle_data
 from densephrases.utils.eval_utils import drqa_exact_match_score, drqa_regex_match_score, \
     drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_f1_match_score
 from eval_phrase_retrieval import evaluate
@@ -30,13 +30,16 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def make_dir(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+
 def save_model(model, path):
     make_dir(path)
     model.save_pretrained(path)
+
 
 def setup_run():
     # See options in densephrases.options
@@ -80,34 +83,12 @@ def setup_run():
 
     return args, save_path
 
+
 def is_train_param(name):
     if name.endswith(".embeddings.word_embeddings.weight"):
         logger.info(f'freezing {name}')
         return False
     return True
-
-
-def shuffle_data(data, args):
-    q_ids, levels, questions, answers, titles, final_answers, final_titles = data
-    qa_pairs = list(zip(q_ids, levels, questions, answers, titles, final_answers, final_titles))
-    random.shuffle(qa_pairs)
-    # Subset data for tuning (if required)
-    if not args.data_sub:
-        qa_pairs_set = qa_pairs
-        logger.info("Subsetting: Full dataset selected for run")
-    else:
-        if args.data_sub < 1:
-            assert (args.data_sub >= 0)
-            sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
-            qa_pairs_set = qa_pairs[:sub_val]
-            logger.info(f"Subsetting: {args.data_sub} fraction ({sub_val} instances) selected for run")
-        else:
-            assert (args.data_sub <= len(qa_pairs))
-            qa_pairs_set = qa_pairs[:int(args.data_sub)]
-            logger.info(f"Subsetting: {args.data_sub} instances selected for run")
-
-    q_ids, levels, questions, answers, titles, final_answers, final_titles = zip(*qa_pairs_set)
-    return q_ids, levels, questions, answers, titles, final_answers, final_titles
 
 
 def get_optimizer_scheduler(encoder, args, train_len, dev_len, n_epochs):
