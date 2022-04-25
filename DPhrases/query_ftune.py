@@ -15,8 +15,9 @@ from densephrases.utils.squad_utils import get_question_dataloader
 from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs, shuffle_data
 from densephrases.utils.eval_utils import drqa_exact_match_score, drqa_regex_match_score, \
-    drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_f1_match_score
-from eval_phrase_retrieval import evaluate
+    drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_f1_match_score, \
+    normalize_answer
+from eval_phrase_retrieval import evaluate, to_arr
 from densephrases import Options
 
 from transformers import (
@@ -179,7 +180,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
-                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args, 
+                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
+                                                              to_arr(titles, 2), outs, args,
                                                               label_strat=args.warmup_label_strat)
 
                 target_encoder.train()
@@ -215,7 +217,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         else:
                             loss.backward()
 
-                        total_loss += loss.mean().item()
+                        total_loss += loss.item()
                         if args.fp16:
                             torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                         else:
@@ -226,16 +228,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         target_encoder.zero_grad()
 
                         pbar.set_description(
-                            f"Ep {ep_idx + 1} Tr loss: {loss.mean().item():.2f}, acc: {sum(accs) / len(accs):.3f}"
+                            f"Ep {ep_idx + 1} Tr loss: {loss.item():.2f}, acc: {sum(accs) / len(accs):.3f}"
                         )
-
-                        if args.wandb:
-                            wandb.log({
-                                "warmup_train/epoch": ep_idx + 1,
-                                "warmup_train/avg_train_loss": total_loss / (step_idx + 1),
-                                "warmup_train/acc@1": sum(total_accs) / len(total_accs),
-                                f"warmup_train/acc@{args.top_k}": sum(total_accs_k) / len(total_accs_k)}
-                            )
 
                     if accs is not None:
                         total_accs += accs
@@ -243,6 +237,16 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                     else:
                         total_accs += [0.0] * len(tgts_t)
                         total_accs_k += [0.0] * len(tgts_t)
+
+                if args.wandb:
+                    wandb.log({
+                        "warmup_train/epoch": ep_idx + 1,
+                        "warmup_train/loss": float('inf') if loss is None else loss.item(),
+                        "warmup_train/avg_total_loss": total_loss / (step_idx + 1),
+                        "warmup_train/acc@1": 0. if loss is None else np.mean(total_accs[-1]),  # np.mean(total_accs),
+                        f"warmup_train/acc@{args.top_k}": 0. if loss is None else np.mean(total_accs_k[-1]),  #np.mean(total_accs_k),
+                    })
+
             step_idx += 1
             logger.info(
                 f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
@@ -379,7 +383,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
-                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, answers, titles, outs, args,
+                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
+                                                              to_arr(titles, 2), outs, args,
                                                               label_strat=args.warmup_label_strat)
 
                 target_encoder.train()
@@ -402,7 +407,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 hop1_skip_cnt = 0.
                 for i, q in enumerate(questions):
                     # Skip "yes/no" questions
-                    if final_answers[i].replace('.', '').lower() in ['yes', 'no']:
+                    if normalize_answer(final_answers[i]) in ['yes', 'no']:
                         continue
                     # Retain the original query text for "easy" questions (i.e. store empty evidence)
                     if levels[i] == 'easy':
@@ -476,9 +481,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                     batch_size=args.per_gpu_train_batch_size
                                 )
                                 u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
-                                                                                      upd_answers, upd_answer_titles,
-                                                                                      upd_outs,
-                                                                                      args,
+                                                                                      to_arr(upd_answers, 2),
+                                                                                      to_arr(upd_answer_titles, 2),
+                                                                                      upd_outs, args,
                                                                                       label_strat=args.label_strat)
                                 # Start vectors
                                 u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
@@ -504,7 +509,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                     if u_loss is not None:
                                         if args.gradient_accumulation_steps > 1:
                                             u_loss = u_loss / args.gradient_accumulation_steps
-                                        u_loss_arr.append(u_loss.mean())
+                                        u_loss_arr.append(u_loss)
                                         if u_accs is not None:
                                             total_u_accs += u_accs
                                             total_u_accs_k += [len(tgt) > 0 for tgt in u_tgts_t]
@@ -566,12 +571,12 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                 "joint_train/second_hop_loss": float('inf') if hop2_skipped else ans_loss.item(),
                                 "joint_train/joint_loss": loss.item(),
                                 "joint_train/avg_total_loss": total_loss / (step_idx + 1),
-                                "joint_train/first_hop_acc@1": np.mean(total_accs),
-                                f"joint_train/first_hop_acc@{args.top_k}": np.mean(total_accs_k),
-                                "joint_train/second_hop_acc@1": np.mean(total_u_accs),
-                                f"joint_train/second_hop_acc@{args.top_k}": np.mean(total_u_accs_k),
-                                f"joint_train/first_hop_skipped": n_hop1_skipped / (step_idx + 1),
-                                f"joint_train/second_hop_skipped": n_hop2_skipped / (step_idx + 1),
+                                "joint_train/first_hop_acc@1": 0. if hop1_skip_cnt == 1 else np.mean(total_accs[-1]),  # np.mean(total_accs),
+                                f"joint_train/first_hop_acc@{args.top_k}": 0. if hop1_skip_cnt == 1 else np.mean(total_accs_k[-1]),  # np.mean(total_accs_k),
+                                "joint_train/second_hop_acc@1": 0. if hop2_skipped else np.mean(total_u_accs[-1]),  # np.mean(total_u_accs),
+                                f"joint_train/second_hop_acc@{args.top_k}": 0. if hop2_skipped else np.mean(total_u_accs_k[-1]),  #np.mean(total_u_accs_k),
+                                f"joint_train/first_hop_skipped": hop1_skip_cnt,  # n_hop1_skipped / (step_idx + 1),
+                                f"joint_train/second_hop_skipped": int(hop2_skipped),  # n_hop2_skipped / (step_idx + 1),
                             })
 
 
@@ -739,7 +744,7 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         targets = [
             [drqa_metric_max_over_ground_truths(match_fn, {
                 'pred_substr': phrase['answer'],
-                'pred_f1': phrase['context'],
+                'pred_f1': phrase['context'],  # sentence of the predicted answer phrase
                 'f1_threshold': args.evidence_f1_threshold,
             }, answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
             for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
