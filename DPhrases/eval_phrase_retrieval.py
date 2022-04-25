@@ -16,7 +16,7 @@ from densephrases.utils.eval_utils import normalize_answer, f1_score, exact_matc
     drqa_regex_match_score, drqa_metric_max_over_ground_truths, drqa_normalize, drqa_substr_match_score, \
     drqa_substr_f1_match_score
 from densephrases.utils.single_utils import load_encoder
-from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
+from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs, shuffle_data
 from densephrases.utils.kilt.eval import evaluate as kilt_evaluate
 from densephrases.utils.kilt.kilt_utils import store_data as kilt_store_data
 from densephrases import Options
@@ -66,12 +66,12 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
     # Load dataset and encode queries
     if firsthop or multihop:
+        qa_pairs = load_qa_pairs(data_path, args, q_idx, multihop=True)
+        if args.eval_data_sub:
+            qa_pairs = shuffle_data(qa_pairs, args)
         # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
         # gold_answers, gold_titles -> second-hop answer phrases and titles
-        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path,
-                                                                                                         args,
-                                                                                                         q_idx,
-                                                                                                         multihop=True)
+        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = qa_pairs
 
         # Skip "easy" questions during evaluation
         if args.filter_easy:

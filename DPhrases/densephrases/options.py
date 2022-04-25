@@ -82,9 +82,11 @@ class Options():
         self.parser.add_argument("--threads", type=int, default=20,
                                  help="multiple threads for converting example to features")
         self.parser.add_argument("--truecase_path", type=str, default='truecase/english_with_questions.dist')
-        self.parser.add_argument("--truecase", dest='truecase', type=lambda x: bool(strtobool(x)), nargs='?',
-                        const=True, default=False, help="Dummy (automatic truecasing supported)")
-        self.parser.add_argument("--data_sub", type=float, default=None, help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
+        self.parser.add_argument("--truecase", action="store_true", help="Dummy (automatic truecasing supported)")
+        self.parser.add_argument("--data_sub", type=float, default=None,
+                                 help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
+        self.parser.add_argument("--eval_data_sub", action="store_true",
+                                 help="Flag to subset data at evaluation based on value passed in --data_sub")
 
     # Reading comprehension (single-passage training) options
     def add_rc_options(self):
