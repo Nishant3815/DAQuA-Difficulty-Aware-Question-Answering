@@ -160,6 +160,7 @@ class Options():
         self.parser.add_argument('--aggregate', dest="aggregate", type=lambda x: bool(strtobool(x)), nargs='?',
                         const=True, default=False)
         self.parser.add_argument('--agg_strat', type=str, default='opt1')
+        self.parser.add_argument('--upd_sent_evd', action='store_true', default=False, help="Append sentence or phrases")
 
         # Evaluation
         self.parser.add_argument('--dev_path', default='open-qa/nq-open/dev_preprocessed.json')

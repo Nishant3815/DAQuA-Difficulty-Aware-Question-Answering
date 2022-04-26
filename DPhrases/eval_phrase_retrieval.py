@@ -180,7 +180,10 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             prune_low_preds=True
         )
 
-        fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        if not args.upd_sent_evd:
+            fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        else:
+            fhop_pred_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_evid_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_title_unpad = [[ret['title'][0] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_score_unpad = [[ret['score'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
