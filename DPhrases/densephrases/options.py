@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 import logging
+from distutils.util import strtobool
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,6 @@ class Options():
     def __init__(self):
         self.parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
         self.initialize_parser()
-
     def add_model_options(self):
         self.parser.add_argument("--model_type", type=str, default='bert',
                                  help="Model type selected in the list", )
@@ -61,7 +61,8 @@ class Options():
         self.parser.add_argument('--norm_th', type=float, default=999)
         self.parser.add_argument('--doc_sample_ratio', type=float, default=0.2)
         self.parser.add_argument('--vec_sample_ratio', type=float, default=0.2)
-        self.parser.add_argument('--cuda', action='store_true', default=False)
+        self.parser.add_argument('--cuda', dest='cuda', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False)
         self.parser.add_argument('--replace', action='store_true', default=False)
         self.parser.add_argument('--num_docs_per_add', type=int, default=2000)
         self.parser.add_argument('--first_passage', action='store_true', default=False, help="dump only first passages")
@@ -81,7 +82,8 @@ class Options():
         self.parser.add_argument("--threads", type=int, default=20,
                                  help="multiple threads for converting example to features")
         self.parser.add_argument("--truecase_path", type=str, default='truecase/english_with_questions.dist')
-        self.parser.add_argument("--truecase", action="store_true", help="Dummy (automatic truecasing supported)")
+        self.parser.add_argument("--truecase", dest='truecase', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False, help="Dummy (automatic truecasing supported)")
         self.parser.add_argument("--data_sub", type=float, default=None, help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
 
     # Reading comprehension (single-passage training) options
@@ -133,9 +135,8 @@ class Options():
         self.parser.add_argument("--save_steps", type=int, default=9999999,
                                  help="Save checkpoint every X updates steps.")
         self.parser.add_argument("--eval_all_checkpoints", action="store_true",
-                                 help="Evaluate all checkpoints starting with the same prefix as model_name", )
+                                 help="Evaluate all checkpoints starting with the same prefix as model_name")
         self.parser.add_argument("--no_cuda", action="store_true", help="Whether not to use CUDA when available")
-        self.parser.add_argument("--wandb", action="store_true", help="Whether to use Weights and Biases logging")
         self.parser.add_argument("--overwrite_output_dir", action="store_true",
                                  help="Overwrite the content of the output directory")
         self.parser.add_argument("--local_rank", type=int, default=-1,
@@ -153,7 +154,8 @@ class Options():
         self.parser.add_argument('--run_mode', default='eval', help="eval | train_query")
         self.parser.add_argument('--top_k', type=int, default=10)
         self.parser.add_argument('--nprobe', type=int, default=256)
-        self.parser.add_argument('--aggregate', action='store_true', default=False)
+        self.parser.add_argument('--aggregate', dest="aggregate", type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False)
         self.parser.add_argument('--agg_strat', type=str, default='opt1')
 
         # Evaluation
@@ -190,7 +192,7 @@ class Options():
         self.parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
         self.parser.add_argument('--label_strat', default='phrase', type=str,
                                  help="label strat={phrase|doc|phrase,doc}")
-        self.parser.add_argument("--wandb", action="store_true", help="Enable Wandb logging.")
+        self.parser.add_argument("--wandb", dest='wandb', type=lambda x: bool(strtobool(x)), help="Enable Wandb logging.")
         ############# Multi-hop ##############
         self.parser.add_argument("--num_firsthop_epochs", type=int, default=1,
                                  help="Number of warmup epochs to train model for first hop retrieval")
@@ -199,10 +201,12 @@ class Options():
         self.parser.add_argument('--warmup_label_strat', default='sent,doc', type=str,
                                  help="label strat={phrase|sent|doc|phrase,doc|sent,doc}")
         self.parser.add_argument('--warmup_agg_strat', type=str, default='opt2a')
-        self.parser.add_argument("--skip_init_eval", action="store_true", help="Skip pre-training eval")
-        self.parser.add_argument("--skip_final_eval", action="store_true", help="Skip post-training eval")
-        self.parser.add_argument("--eval_all_splits", action="store_true",
-                                 help="Whether to perform the initial/final evals on all data splits or not")
+        self.parser.add_argument("--skip_init_eval", dest='skip_init_eval', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False,  help="Skip pre-training eval")
+        self.parser.add_argument("--skip_final_eval", dest='skip_final_eval', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False,  help="Skip post-training eval")
+        self.parser.add_argument("--eval_all_splits", dest='eval_all_splits', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False, help="Whether to perform the initial/final evals on all data splits or not")
         self.parser.add_argument("--evidence_f1_threshold", default=0.7, type=float,
                                  help="F1 score threshold b/w evidence and gold SUP sentence to pick training targets")
         self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
