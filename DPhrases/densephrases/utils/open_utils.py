@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 truecase = None
 
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def load_phrase_index(args, ignore_logging=False):
     # Configure paths for index serving
     phrase_dump_dir = os.path.join(args.dump_dir, args.phrase_dir)
