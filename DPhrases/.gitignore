@@ -2,4 +2,5 @@
 cache/
 no_ftune_hotpot_eval/*.json
 __pycache__/
-
+jobs/
+wandb/
