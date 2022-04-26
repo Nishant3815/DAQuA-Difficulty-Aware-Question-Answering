@@ -16,7 +16,7 @@ from densephrases.utils.eval_utils import normalize_answer, f1_score, exact_matc
     drqa_regex_match_score, drqa_metric_max_over_ground_truths, drqa_normalize, drqa_substr_match_score, \
     drqa_substr_f1_match_score
 from densephrases.utils.single_utils import load_encoder
-from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs
+from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs, shuffle_data
 from densephrases.utils.kilt.eval import evaluate as kilt_evaluate
 from densephrases.utils.kilt.kilt_utils import store_data as kilt_store_data
 from densephrases import Options
@@ -66,29 +66,12 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
     # Load dataset and encode queries
     if firsthop or multihop:
+        qa_pairs = load_qa_pairs(data_path, args, q_idx, multihop=True)
+        if args.eval_data_sub:
+            qa_pairs = shuffle_data(qa_pairs, args)
         # gold_evids, gold_evid_titles -> first-hop SUP sentences and titles
         # gold_answers, gold_titles -> second-hop answer phrases and titles
-        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = load_qa_pairs(data_path,
-                                                                                                         args,
-                                                                                                         q_idx,
-                                                                                                         multihop=True)
-
-        qa_pairs = list(zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles))
-        
-        if not args.data_sub:
-            logger.info("Full Dataset selected for run")
-        else:
-            qa_pairs_set = qa_pairs
-            if args.data_sub < 1:
-                assert (args.data_sub >= 0)
-                sub_val = int(np.floor(len(qa_pairs)*args.data_sub))
-                qa_pairs_set = qa_pairs[:sub_val]
-                logger.info("{args.data_sub} fraction of dataset selected for run")
-            else:
-                assert (args.data_sub <=len(qa_pairs))
-                qa_pairs_set = qa_pairs[:int(args.data_sub)]
-                logger.info("{args.data_sub} number of dataset instances selected for run")
-            qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qa_pairs_set)
+        qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = qa_pairs
 
         # Skip "easy" questions during evaluation
         if args.filter_easy:
@@ -105,7 +88,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
                       (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
                       zip(qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles) if
-                      all([g.lower() not in ['yes', 'no'] for g in gold_ans])]
+                      gold_ans.replace('.', '').lower() not in ['yes', 'no']]
 
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
@@ -293,19 +276,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
     no_ans = sum([a == '' for a in top1_preds])
     logger.info(f'no_ans/all: {no_ans}, {len(top1_preds)}')
     logger.info(f'Evaluating {len(top1_preds)} answers')
-
-    # Get em/f1
-    f1s, ems = [], []
-    for prediction, groundtruth in zip(top1_preds, answers):
-        if len(groundtruth) == 0:
-            f1s.append(0)
-            ems.append(0)
-            continue
-        f1s.append(max([f1_score(prediction, gt)[0] for gt in groundtruth]))
-        ems.append(max([exact_match_score(prediction, gt) for gt in groundtruth]))
-    final_f1, final_em = np.mean(f1s), np.mean(ems)
-    if not args.regex:
-        logger.info(f'EM: {final_em * 100:.2f}%, F1: {final_f1:.2f}%')
 
     # Top 1/k em (or regex em)
     exact_match_topk = 0
@@ -736,12 +706,14 @@ def extract_top_pred_chains(fh_data, final_data, args):
     st_idx_li = []
     en_idx_li = []
     val_topk = args.top_k
+    pred_fn = normalize_answer if not args.no_eval_norm else lambda x: x
     for s_idx, e_idx in ranked_pairs:
-        if final_pred_arr[s_idx, e_idx] not in covered and val_topk:
+        fp = pred_fn(final_pred_arr[s_idx, e_idx])
+        if fp not in covered and val_topk:
             val_topk -= 1
             st_idx_li.append(s_idx)
             en_idx_li.append(e_idx)
-            covered.add(final_pred_arr[s_idx, e_idx])
+            covered.add(fp)
 
     # Get final top-k answers, titles and phrases
     topk_chain_scores = path_scores[st_idx_li, en_idx_li]

@@ -84,7 +84,10 @@ class Options():
         self.parser.add_argument("--truecase_path", type=str, default='truecase/english_with_questions.dist')
         self.parser.add_argument("--truecase", dest='truecase', type=lambda x: bool(strtobool(x)), nargs='?',
                         const=True, default=False, help="Dummy (automatic truecasing supported)")
-        self.parser.add_argument("--data_sub", type=float, default=None, help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
+        self.parser.add_argument("--data_sub", type=float, default=None,
+                                 help="if nothing is passed takes in full data otherwise subsets data if fraction passed else assumes input as number of instance")
+        self.parser.add_argument("--eval_data_sub", action="store_true",
+                                 help="Flag to subset data at evaluation based on value passed in --data_sub")
 
     # Reading comprehension (single-passage training) options
     def add_rc_options(self):
@@ -212,7 +215,7 @@ class Options():
         self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
                                  help="Metric to decide best epoch for warmup training: phrase | evidence | joint")
         self.parser.add_argument('--dev_metric', default='phrase', type=str,
-                                 help="Metric to decide best epoch for joint training: phrase | <TBD>")
+                                 help="Metric to decide best epoch for joint training: phrase | phrase_k | <TBD>")
         self.parser.add_argument("--chain_score_op", default='sum', type=str,
                                  help="Aggregation operator to use for combining scores from different hops: sum | prod")
         self.parser.add_argument("--joint_loss_lambda", default=0.4, type=float,
@@ -223,6 +226,8 @@ class Options():
                                  help="Drop questions that have difficulty level marked as 'easy'")
         self.parser.add_argument("--filter_yn", action='store_true', default=False,
                                  help="Drop questions that have yes/no as the gold answer")
+        self.parser.add_argument("--no_eval_norm", action='store_true', default=False,
+                                 help="Prevent answer normalization for predictions during evaluation")
 
 
     def add_demo_options(self):
