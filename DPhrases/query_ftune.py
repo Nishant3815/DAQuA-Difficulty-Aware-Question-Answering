@@ -427,7 +427,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             t = int(t.item())
                             upd_q_id = q_ids[i] + f"_{t}"
                             upd_level = levels[i]
-                            upd_evidence = outs[i][t]['answer']
+                            if not args.upd_sent_evd:
+                                upd_evidence = outs[i][t]['answer']
+                            elif args.upd_sent_evd:
+                                upd_evidence = outs[i][t]['context']
                             upd_evidence_title = outs[i][t]['title'][0]
                             upd_answer = final_answers[i]
                             upd_answer_title = final_titles[i]
