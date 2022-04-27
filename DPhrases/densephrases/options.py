@@ -43,6 +43,8 @@ class Options():
                                       "and end predictions are not conditioned on one another.", )
         self.parser.add_argument("--do_lower_case", action="store_true",
                                  help="Set this flag if you are using an uncased model.")
+        self.parser.add_argument("--load_warmup_dir", type=str, default=None, help= "location for warmup model to be used towards evaluation")
+        self.parser.add_argument("--ret_both_warm_pretrain", action='store_true', default=False, help="if flag is added returns both warmup from warmup_dir and pretrained encoder from load_dir")
 
     def add_index_options(self):
         self.parser.add_argument('--stage', type=str)
@@ -196,6 +198,7 @@ class Options():
         self.parser.add_argument('--label_strat', default='phrase', type=str,
                                  help="label strat={phrase|doc|phrase,doc}")
         self.parser.add_argument("--wandb", dest='wandb', type=lambda x: bool(strtobool(x)), help="Enable Wandb logging.")
+        self.parser.add_argument("--ret_multi_stage_model", action="store_true", default=False, help='related to returning both warmup and pretrained moodels from load_dir and load_warmup_dir')
         ############# Multi-hop ##############
         self.parser.add_argument("--num_firsthop_epochs", type=int, default=1,
                                  help="Number of warmup epochs to train model for first hop retrieval")
