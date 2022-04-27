@@ -392,6 +392,7 @@ def get_question_results(question_examples, query_eval_features, question_datalo
 
     iterator = question_dataloader if silent else tqdm(question_dataloader, desc="Evaluating", disable=True)
     for batch in iterator:
+        model.eval()
         batch = tuple(t.to(device) for t in batch)
         assert len(batch) == 4
 
@@ -407,6 +408,7 @@ def get_question_results(question_examples, query_eval_features, question_datalo
             # feature_indices.unsqueeze_(0)
 
             outputs = model(**inputs)
+        model.train()
 
         for i, feature_index in enumerate(feature_indices):
             eval_feature = query_eval_features[feature_index.item()]
