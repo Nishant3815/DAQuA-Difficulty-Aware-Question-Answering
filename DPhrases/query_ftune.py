@@ -476,7 +476,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             top_phrases_upd = get_top_phrases(
                                 mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
                                 target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
-                                upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True
+                                upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
                             )
                             u_loss_arr = []
                             for upd_step_idx, (
@@ -651,14 +651,17 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
 
 def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encoder, tokenizer, batch_size, args,
-                    final_answers, final_titles, agg_strat=None, always_return_sent=False):
+                    final_answers, final_titles, agg_strat=None, always_return_sent=False, silent=False):
     # Search
     step = batch_size
     search_fn = mips.search
     query2vec = get_query2vec(
         query_encoder=query_encoder, tokenizer=tokenizer, args=args, batch_size=batch_size, silent=True
     )
-    for q_idx in range(0, len(questions), step):
+    iterator = range(0, len(questions), step)
+    if not silent:
+        iterator = tqdm(iterator)
+    for q_idx in iterator:
         outs = query2vec(questions[q_idx:q_idx + step])  # outs[0] contains (start_vec_list, end_vec_list, query_tokens)
         start = np.concatenate([out[0] for out in outs], 0)
         end = np.concatenate([out[1] for out in outs], 0)
