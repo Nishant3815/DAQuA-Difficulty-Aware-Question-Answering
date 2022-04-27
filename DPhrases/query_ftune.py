@@ -266,7 +266,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 new_args.top_k = 10
                 new_args.test_path = args.dev_path
                 eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True,
-                                    pred_fname_suffix=f"warmup_{ep_idx + 1}", save_path=save_path,
+                                    pred_fname_suffix=f"warmup_ep{ep_idx + 1}", save_path=save_path,
                                     save_pred=True)
                 dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
                 evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = eval_res[1]
@@ -284,16 +284,16 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 if args.wandb:
                     wandb.log({
                         "warmup_dev_eval/epoch": ep_idx + 1,
-                        "warmup_dev_eval/dev_acc@1": dev_em,
-                        "warmup_dev_eval/dev_f1@1": dev_f1,
-                        f"warmup_dev_eval/dev_acc@{new_args.top_k}": dev_emk,
-                        f"warmup_dev_eval/dev_f1@{new_args.top_k}": dev_f1k,
-                        "warmup_dev_eval/dev_evidence_acc@1": evid_dev_em,
-                        "warmup_dev_eval/dev_evidence_f1@1": evid_dev_f1,
-                        f"warmup_dev_eval/dev_evidence_acc@{new_args.top_k}": evid_dev_emk,
-                        f"warmup_dev_eval/dev_evidence_f1@{new_args.top_k}": evid_dev_f1k,
-                        "warmup_dev_eval/dev_set_joint_f1@1": joint_substr_f1,
-                        f"warmup_dev_eval/dev_set_joint_f1@{new_args.top_k}": joint_substr_f1k
+                        "warmup_dev_eval/acc@1": dev_em,
+                        "warmup_dev_eval/f1@1": dev_f1,
+                        f"warmup_dev_eval/acc@{new_args.top_k}": dev_emk,
+                        f"warmup_dev_eval/f1@{new_args.top_k}": dev_f1k,
+                        "warmup_dev_eval/evidence_acc@1": evid_dev_em,
+                        "warmup_dev_eval/evidence_f1@1": evid_dev_f1,
+                        f"warmup_dev_eval/evidence_acc@{new_args.top_k}": evid_dev_emk,
+                        f"warmup_dev_eval/evidence_f1@{new_args.top_k}": evid_dev_f1k,
+                        "warmup_dev_eval/joint_substr_f1@1": joint_substr_f1,
+                        f"warmup_dev_eval/joint_substr_f1@{new_args.top_k}": joint_substr_f1k
                     })
 
                 # Save best model
@@ -367,6 +367,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_u_accs_k = []
             n_hop1_skipped = 0.  # Track how many first hops skipped
             n_hop2_skipped = 0.  # Track how many second hops skipped
+            n_hop2_skipped_ans = 0.  # Track how many second hops skipped because of no valid final ans
+            n_hop2_skipped_evid = 0.  # Track how many second hops skipped because of no valid first hop evid
 
             # Get questions and corresponding answers with other metadata
             q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
@@ -464,8 +466,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             total_accs += [0.0] * len(tgts_t)
                             total_accs_k += [0.0] * len(tgts_t)
 
+                        hop2_skipped, hop2_skipped_evid, hop2_skipped_ans = True, True, True
                         if len(upd_queries) > 0:
-                            hop2_skipped = False
+                            hop2_skipped, hop2_skipped_evid, hop2_skipped_ans = False, False, False
                             # Joint training: 2nd stage
                             upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, \
                             upd_answers, upd_answer_titles = list(zip(*upd_queries))
@@ -522,8 +525,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             if len(u_loss_arr) == 0:
                                 hop2_skipped = True
                                 n_hop2_skipped += 1
-                                print()
-                                logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid ans)")
+                                hop2_skipped_ans = True
+                                n_hop2_skipped_ans += 1
+                                # print()
+                                # logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid ans)")
                                 loss = fhop_loss
                                 ans_loss = torch.tensor(0)
                             else:
@@ -535,52 +540,57 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         else:
                             hop2_skipped = True
                             n_hop2_skipped += 1
-                            print()
-                            logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid evidence)")
-                            loss = fhop_loss
+                            hop2_skipped_evid = True
+                            n_hop2_skipped_evid += 1
+                            # print()
+                            # logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid evidence)")
+                            loss = lmbda * fhop_loss
                             ans_loss = torch.tensor(0)
 
-                        # Backpropagate combined loss and update model
-                        try:
+                        if type(loss) is torch.Tensor:
+                            # Backpropagate combined loss and update model
+                            try:
+                                if args.fp16:
+                                    with amp.scale_loss(loss, optimizer) as scaled_loss:
+                                        scaled_loss.backward()
+                                else:
+                                    loss.backward()
+                            except:
+                                logger.info("ERROR: loss.backward()")
+                                logger.info(f"Number of updated queries: {len(upd_queries)}")
+                                raise ValueError("loss.backward()")
+
+                            total_loss += loss.item()
                             if args.fp16:
-                                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                                    scaled_loss.backward()
+                                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                             else:
-                                loss.backward()
-                        except:
-                            logger.info("ERROR: loss.backward()")
-                            logger.info(f"Number of updated queries: {len(upd_queries)}")
-                            raise ValueError("loss.backward()")
+                                torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
+                            optimizer.step()
+                            scheduler.step()  # Update learning rate schedule
+                            target_encoder.zero_grad()
 
-                        total_loss += loss.item()
-                        if args.fp16:
-                            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                        else:
-                            torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
-                        optimizer.step()
-                        scheduler.step()  # Update learning rate schedule
-                        target_encoder.zero_grad()
+                            pbar.set_description(
+                                f"Ep{ep_idx + 1}_step{step_idx + 1}: loss: {loss.item():.2f}, " +
+                                f"acc1: {sum(total_accs) / len(total_accs):.3f}, " +
+                                "acc2: " + ("skipped" if hop2_skipped else f"{sum(total_u_accs) / len(total_u_accs):.3f}")
+                            )
 
-                        pbar.set_description(
-                            f"Ep{ep_idx + 1}_step{step_idx + 1}: loss: {loss.item():.2f}, " +
-                            f"acc1: {sum(total_accs) / len(total_accs):.3f}, " +
-                            "acc2: " + ("skipped" if hop2_skipped else f"{sum(total_u_accs) / len(total_u_accs):.3f}")
-                        )
-
-                        if args.wandb:
-                            wandb.log({
-                                "joint_train/epoch": ep_idx + 1,
-                                "joint_train/first_hop_loss": fhop_loss.item(),
-                                "joint_train/second_hop_loss": float('inf') if hop2_skipped else ans_loss.item(),
-                                "joint_train/joint_loss": loss.item(),
-                                "joint_train/avg_total_loss": total_loss / (step_idx + 1),
-                                "joint_train/first_hop_acc@1": 0. if hop1_skip_cnt == 1 else np.mean(total_accs[-1]),  # np.mean(total_accs),
-                                f"joint_train/first_hop_acc@{args.top_k}": 0. if hop1_skip_cnt == 1 else np.mean(total_accs_k[-1]),  # np.mean(total_accs_k),
-                                "joint_train/second_hop_acc@1": 0. if hop2_skipped else np.mean(total_u_accs[-1]),  # np.mean(total_u_accs),
-                                f"joint_train/second_hop_acc@{args.top_k}": 0. if hop2_skipped else np.mean(total_u_accs_k[-1]),  #np.mean(total_u_accs_k),
-                                f"joint_train/first_hop_skipped": hop1_skip_cnt,  # n_hop1_skipped / (step_idx + 1),
-                                f"joint_train/second_hop_skipped": int(hop2_skipped),  # n_hop2_skipped / (step_idx + 1),
-                            })
+                            if args.wandb:
+                                wandb.log({
+                                    "joint_train/epoch": ep_idx + 1,
+                                    "joint_train/first_hop_loss": fhop_loss.item(),
+                                    "joint_train/second_hop_loss": float('inf') if hop2_skipped else ans_loss.item(),
+                                    "joint_train/joint_loss": loss.item(),
+                                    "joint_train/avg_total_loss": total_loss / (step_idx + 1),
+                                    "joint_train/first_hop_acc@1": 0. if hop1_skip_cnt == 1 else np.mean(total_accs[-1]),  # np.mean(total_accs),
+                                    f"joint_train/first_hop_acc@{args.top_k}": 0. if hop1_skip_cnt == 1 else np.mean(total_accs_k[-1]),  # np.mean(total_accs_k),
+                                    "joint_train/second_hop_acc@1": 0. if hop2_skipped else np.mean(total_u_accs[-1]),  # np.mean(total_u_accs),
+                                    f"joint_train/second_hop_acc@{args.top_k}": 0. if hop2_skipped else np.mean(total_u_accs_k[-1]),  #np.mean(total_u_accs_k),
+                                    f"joint_train/first_hop_skipped": hop1_skip_cnt,  # n_hop1_skipped / (step_idx + 1),
+                                    f"joint_train/second_hop_skipped": int(hop2_skipped),  # n_hop2_skipped / (step_idx + 1),
+                                    f"joint_train/second_hop_skipped_ans": int(hop2_skipped_ans),
+                                    f"joint_train/second_hop_skipped_evid": int(hop2_skipped_evid),
+                                })
 
 
             step_idx += 1
@@ -797,16 +807,16 @@ if __name__ == '__main__':
                             joint_substr_f1, joint_substr_f1k = res[2]
                             wandb.log({
                                 "warmup_dev_eval/epoch": 0,
-                                "warmup_dev_eval/dev_acc@1": dev_em,
-                                "warmup_dev_eval/dev_f1@1": dev_f1,
-                                f"warmup_dev_eval/dev_acc@{args.top_k}": dev_emk,
-                                f"warmup_dev_eval/dev_f1@{args.top_k}": dev_f1k,
-                                "warmup_dev_eval/dev_evidence_acc@1": evid_dev_em,
-                                "warmup_dev_eval/dev_evidence_f1@1": evid_dev_f1,
-                                f"warmup_dev_eval/dev_evidence_acc@{args.top_k}": evid_dev_emk,
-                                f"warmup_dev_eval/dev_evidence_f1@{args.top_k}": evid_dev_f1k,
-                                "warmup_dev_eval/dev_set_joint_f1@1": joint_substr_f1,
-                                f"warmup_dev_eval/dev_set_joint_f1@{args.top_k}": joint_substr_f1k
+                                "warmup_dev_eval/acc@1": dev_em,
+                                "warmup_dev_eval/f1@1": dev_f1,
+                                f"warmup_dev_eval/acc@{args.top_k}": dev_emk,
+                                f"warmup_dev_eval/f1@{args.top_k}": dev_f1k,
+                                "warmup_dev_eval/evidence_acc@1": evid_dev_em,
+                                "warmup_dev_eval/evidence_f1@1": evid_dev_f1,
+                                f"warmup_dev_eval/evidence_acc@{args.top_k}": evid_dev_emk,
+                                f"warmup_dev_eval/evidence_f1@{args.top_k}": evid_dev_f1k,
+                                "warmup_dev_eval/joint_substr_f1@1": joint_substr_f1,
+                                f"warmup_dev_eval/joint_substr_f1@{args.top_k}": joint_substr_f1k
                             })
                 else:
                     # Evaluate joint (multi-hop) stage
@@ -843,15 +853,68 @@ if __name__ == '__main__':
             paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
             for split in paths:
                 logger.info(f"Final: Evaluating {args.load_dir} on the {split.upper()} set")
-                evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                         multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+                res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+                if args.wandb:
+                    wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
+                    if args.warmup_only:
+                        split_em, split_f1, split_emk, split_f1k = res[0]
+                        evid_split_em, evid_split_f1, evid_split_emk, evid_split_f1k = res[1]
+                        joint_substr_f1, joint_substr_f1k = res[2]
+                        wandb.log({
+                            f"{wandb_panel}/acc@1": split_em,
+                            f"{wandb_panel}/f1@1": split_f1,
+                            f"{wandb_panel}/acc@{args.top_k}": split_emk,
+                            f"{wandb_panel}/f1@{args.top_k}": split_f1k,
+                            f"{wandb_panel}/evidence_acc@1": evid_split_em,
+                            f"{wandb_panel}/evidence_f1@1": evid_split_f1,
+                            f"{wandb_panel}/evidence_acc@{args.top_k}": evid_split_emk,
+                            f"{wandb_panel}/evidence_f1@{args.top_k}": evid_split_f1k,
+                            f"{wandb_panel}/joint_substr_f1@1": joint_substr_f1,
+                            f"{wandb_panel}/joint_substr_f1@{args.top_k}": joint_substr_f1k
+                        })
+                    else:
+                        split_em, split_f1, split_emk, split_f1k = res
+                        wandb.log({
+                            f"{wandb_panel}/acc@1": split_em,
+                            f"{wandb_panel}/f1@1": split_f1,
+                            f"{wandb_panel}/acc@{args.top_k}": split_emk,
+                            f"{wandb_panel}/f1@{args.top_k}": split_f1k,
+                        })
+
     elif args.run_mode == 'eval':
         mips = load_phrase_index(args)
         paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
         for split in paths:
             logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
-            evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                     multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                           multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            if args.wandb:
+                wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
+                if args.warmup_only:
+                    split_em, split_f1, split_emk, split_f1k = res[0]
+                    evid_split_em, evid_split_f1, evid_split_emk, evid_split_f1k = res[1]
+                    joint_substr_f1, joint_substr_f1k = res[2]
+                    wandb.log({
+                        f"{wandb_panel}/acc@1": split_em,
+                        f"{wandb_panel}/f1@1": split_f1,
+                        f"{wandb_panel}/acc@{args.top_k}": split_emk,
+                        f"{wandb_panel}/f1@{args.top_k}": split_f1k,
+                        f"{wandb_panel}/evidence_acc@1": evid_split_em,
+                        f"{wandb_panel}/evidence_f1@1": evid_split_f1,
+                        f"{wandb_panel}/evidence_acc@{args.top_k}": evid_split_emk,
+                        f"{wandb_panel}/evidence_f1@{args.top_k}": evid_split_f1k,
+                        f"{wandb_panel}/joint_substr_f1@1": joint_substr_f1,
+                        f"{wandb_panel}/joint_substr_f1@{args.top_k}": joint_substr_f1k
+                    })
+                else:
+                    split_em, split_f1, split_emk, split_f1k = res
+                    wandb.log({
+                        f"{wandb_panel}/acc@1": split_em,
+                        f"{wandb_panel}/f1@1": split_f1,
+                        f"{wandb_panel}/acc@{args.top_k}": split_emk,
+                        f"{wandb_panel}/f1@{args.top_k}": split_f1k,
+                    })
     else:
         raise NotImplementedError
 

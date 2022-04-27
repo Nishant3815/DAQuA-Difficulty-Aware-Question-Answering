@@ -392,7 +392,6 @@ def get_question_results(question_examples, query_eval_features, question_datalo
 
     iterator = question_dataloader if silent else tqdm(question_dataloader, desc="Evaluating", disable=True)
     for batch in iterator:
-        model.eval()
         batch = tuple(t.to(device) for t in batch)
         assert len(batch) == 4
 
