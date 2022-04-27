@@ -408,7 +408,6 @@ def get_question_results(question_examples, query_eval_features, question_datalo
             # feature_indices.unsqueeze_(0)
 
             outputs = model(**inputs)
-        model.train()
 
         for i, feature_index in enumerate(feature_indices):
             eval_feature = query_eval_features[feature_index.item()]
