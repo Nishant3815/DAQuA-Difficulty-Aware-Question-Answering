@@ -891,9 +891,18 @@ if __name__ == '__main__':
         mips = load_phrase_index(args)
         paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
         for split in paths:
-            logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
-            res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                           multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            if not args.ret_multi_stage_model:
+                logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
+                res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            else:
+                logger.info(f"Evaluation of {split.upper()} set done using warmup model on first stage and pretrained model on second stage")
+                args.ret_both_warm_pretrain = True
+                device = 'cuda' if args.cuda else 'cpu'
+                ptrained_model, warmup_model, tokenizer_model, _ = load_encoder(device, args, query_only=True)
+                res = evaluate(args, mips, (ptrained_model, warmup_model), tokenizer_model, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+
             if args.wandb:
                 wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
                 if args.warmup_only:

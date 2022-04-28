@@ -93,12 +93,19 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
+    
+    if type(query_encoder)==tuple:
+        # Leveraged we want to encode using warmup_model at first hop and pretrained model at second hop
+        logger.info(f'Pretrained query encoder loaded from {args.load_dir} and warmup query encoder loaded from {args.load_warmup_dir}')
+        ptrained_query_encoder, warmup_query_encoder = query_encoder
+        query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
 
-    if query_encoder is None:
-        logger.info(f'Query encoder will be loaded from {args.load_dir}')
-        device = 'cuda' if args.cuda else 'cpu'
-        query_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
-    query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
+    else:
+        if query_encoder is None:
+            logger.info(f'Query encoder will be loaded from {args.load_dir}')
+            device = 'cuda' if args.cuda else 'cpu'
+            query_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+        query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
 
     # Load MIPS
     if mips is None:
@@ -201,7 +208,10 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 continue
 
             upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
-            upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
+            if type(query_encoder)==tuple:
+                upd_query_vec = embed_all_query(upd_queries, args, ptrained_query_encoder, tokenizer, silent=True)
+            else:
+                upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
 
             final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe,
                                        top_k=args.top_k, max_answer_length=args.max_answer_length,
@@ -753,6 +763,9 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
+    
+    if args.ret_both_warm_pretrain:
+        raise NotImplementedError
 
     if args.run_mode == 'eval':
         evaluate(args)
