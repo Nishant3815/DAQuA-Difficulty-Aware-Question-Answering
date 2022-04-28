@@ -40,6 +40,7 @@ def make_dir(path):
 def save_model(model, path):
     make_dir(path)
     model.save_pretrained(path)
+    return path
 
 
 def setup_run():
@@ -131,10 +132,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
-    fixed_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
-    # Train a copy of it
-    logger.info("Copying target encoder")
-    target_encoder = copy.deepcopy(fixed_encoder)
+    target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
 
     # MIPS
     if mips is None:
@@ -158,7 +156,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
         # Initially, save pre-trained model as the best model
         save_model(target_encoder, save_path)
-        save_model(target_encoder, os.path.join(save_path, "warmup_ep0"))
+        last_saved_path = save_model(target_encoder, os.path.join(save_path, "warmup_ep0"))
 
         # Warm-up the model with a first-hop retrieval objective
         for ep_idx in range(int(args.num_firsthop_epochs)):
@@ -172,7 +170,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, levels, questions, answers, titles, fixed_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
                 always_return_sent=True)
             )
@@ -258,8 +256,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             )
 
             # Save epoch model
-            save_model(target_encoder, os.path.join(save_path, f"warmup_ep{ep_idx + 1}"))
-            fixed_encoder = copy.deepcopy(target_encoder)
+            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"warmup_ep{ep_idx + 1}"))
 
             if not args.skip_warmup_dev_eval:
                 # Dev evaluation
@@ -269,7 +266,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 new_args = copy.deepcopy(args)
                 new_args.top_k = 10
                 new_args.test_path = args.dev_path
-                eval_res = evaluate(new_args, mips, target_encoder, tokenizer, firsthop=True,
+                new_args.load_dir = last_saved_path
+                eval_res = evaluate(new_args, mips=mips, tokenizer=tokenizer, firsthop=True,
                                     pred_fname_suffix=f"warmup_ep{ep_idx + 1}", save_path=save_path,
                                     save_pred=True)
                 dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
@@ -323,17 +321,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             # Load best warmed-up model and initialize optimizer/scheduler
             logger.info("Loading best warmed-up encoder")
             args.load_dir = save_path
-            fixed_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
-            # Train a copy of it
-            logger.info("Copying target encoder")
-            target_encoder = copy.deepcopy(fixed_encoder)
+            target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
             best_acc = -1000.0
             best_epoch = 0
             # If warmup was executed, run dev eval before starting joint training
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
             new_args.test_path = args.dev_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True,
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
                                                         pred_fname_suffix="joint_ep0", save_path=save_path,
                                                         save_pred=True)
             # Dev metric to use for picking the best epoch
@@ -354,7 +349,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
         else:
             # Initially, save pre-trained model as the best model
             save_model(target_encoder, save_path)
-            save_model(target_encoder, os.path.join(save_path, f"joint_ep0"))
+            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"joint_ep0"))
 
 
         # Initialize optimizer & scheduler
@@ -382,7 +377,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, levels, questions, answers, titles, fixed_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
                 always_return_sent=True)
             )
@@ -482,7 +477,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
                             top_phrases_upd = get_top_phrases(
                                 mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
-                                fixed_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
+                                target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
                                 upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
                             )
                             u_loss_arr = []
@@ -619,7 +614,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
             new_args.test_path = args.dev_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips, target_encoder, tokenizer, multihop=True,
+            new_args.load_dir = last_saved_path
+            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
                                                         pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
                                                         save_pred=True)
             # Warm-up dev metric to use for picking the best epoch
@@ -641,8 +637,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 })
 
             # Save epoch model
-            save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
-            fixed_encoder = copy.deepcopy(target_encoder)
+            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
             # Save best model
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
