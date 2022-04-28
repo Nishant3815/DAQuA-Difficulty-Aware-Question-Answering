@@ -131,7 +131,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
-    target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+    fixed_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+    # Train a copy of it
+    logger.info("Copying target encoder")
+    target_encoder = copy.deepcopy(fixed_encoder)
 
     # MIPS
     if mips is None:
@@ -169,7 +172,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, levels, questions, answers, titles, fixed_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
                 always_return_sent=True)
             )
@@ -256,6 +259,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Save epoch model
             save_model(target_encoder, os.path.join(save_path, f"warmup_ep{ep_idx + 1}"))
+            fixed_encoder = copy.deepcopy(target_encoder)
 
             if not args.skip_warmup_dev_eval:
                 # Dev evaluation
@@ -319,7 +323,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             # Load best warmed-up model and initialize optimizer/scheduler
             logger.info("Loading best warmed-up encoder")
             args.load_dir = save_path
-            target_encoder, tokenizer, _ = load_encoder(device, args)
+            fixed_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+            # Train a copy of it
+            logger.info("Copying target encoder")
+            target_encoder = copy.deepcopy(fixed_encoder)
             best_acc = -1000.0
             best_epoch = 0
             # If warmup was executed, run dev eval before starting joint training
@@ -375,7 +382,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Progress bar
             pbar = tqdm(get_top_phrases(
-                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
+                mips, q_ids, levels, questions, answers, titles, fixed_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
                 always_return_sent=True)
             )
@@ -475,7 +482,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
                             top_phrases_upd = get_top_phrases(
                                 mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
-                                target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
+                                fixed_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
                                 upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
                             )
                             u_loss_arr = []
@@ -592,7 +599,6 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                                     f"joint_train/second_hop_skipped_evid": int(hop2_skipped_evid),
                                 })
 
-
             step_idx += 1
             logger.info(
                 f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.3f} | "
@@ -636,6 +642,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             # Save epoch model
             save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
+            fixed_encoder = copy.deepcopy(target_encoder)
             # Save best model
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
@@ -889,9 +896,18 @@ if __name__ == '__main__':
         mips = load_phrase_index(args)
         paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
         for split in paths:
-            logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
-            res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                           multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            if not args.ret_multi_stage_model:
+                logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
+                res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+            else:
+                logger.info(f"Evaluation of {split.upper()} set done using warmup model on first stage and pretrained model on second stage")
+                args.ret_both_warm_pretrain = True
+                device = 'cuda' if args.cuda else 'cpu'
+                ptrained_model, warmup_model, tokenizer_model, _ = load_encoder(device, args, query_only=True)
+                res = evaluate(args, mips, (ptrained_model, warmup_model), tokenizer_model, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+
             if args.wandb:
                 wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
                 if args.warmup_only:
