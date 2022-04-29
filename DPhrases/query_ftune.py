@@ -156,14 +156,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
         # Initially, save pre-trained model as the best model
         save_model(target_encoder, save_path)
-        last_saved_path = save_model(target_encoder, os.path.join(save_path, "warmup_ep0"))
 
         # Warm-up the model with a first-hop retrieval objective
         for ep_idx in range(int(args.num_firsthop_epochs)):
             # Training
-            total_loss = 0.0
+            total_loss = 0.
             total_accs = []
             total_accs_k = []
+            backprop_steps = 0.
 
             # Load training dataset
             q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
@@ -210,6 +210,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                     # Optimize, get acc and report
                     if loss is not None:
+                        backprop_steps += 1
                         if args.gradient_accumulation_steps > 1:
                             loss = loss / args.gradient_accumulation_steps
                         if args.fp16:
@@ -228,31 +229,29 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         scheduler.step()  # Update learning rate schedule
                         target_encoder.zero_grad()
 
-                        pbar.set_description(
-                            f"Ep {ep_idx + 1} Tr loss: {loss.item():.2f}, acc: {sum(accs) / len(accs):.3f}"
-                        )
-
-                    if accs is not None:
                         total_accs += accs
                         total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
                     else:
                         total_accs += [0.0] * len(tgts_t)
                         total_accs_k += [0.0] * len(tgts_t)
 
+                    pbar.set_description(
+                        f"Ep {ep_idx + 1} Tr loss: " + ("skipped, " if loss is None else f"{loss.item():.2f}, ") +
+                        f"acc: {np.mean(total_accs[-1]):.3f}"
+                    )
+
                 if args.wandb:
                     wandb.log({
                         "warmup_train/epoch": ep_idx + 1,
                         "warmup_train/loss": float('inf') if loss is None else loss.item(),
-                        "warmup_train/avg_total_loss": total_loss / (step_idx + 1),
-                        "warmup_train/acc@1": 0. if loss is None else np.mean(total_accs[-1]),  # np.mean(total_accs),
-                        f"warmup_train/acc@{args.top_k}": 0. if loss is None else np.mean(total_accs_k[-1]),  #np.mean(total_accs_k),
+                        "warmup_train/avg_total_loss": total_loss / max(backprop_steps, 1),
+                        "warmup_train/acc@1": float('inf') if loss is None else np.mean(total_accs[-1]),
+                        f"warmup_train/acc@{args.top_k}": float('inf') if loss is None else np.mean(total_accs_k[-1]),
                     })
 
-            step_idx += 1
             logger.info(
-                f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.2f} | train " +
-                f"acc@1: {sum(total_accs) / len(total_accs):.3f} | " +
-                f"acc@{args.top_k}: {sum(total_accs_k) / len(total_accs_k):.3f}"
+                f"Avg train loss ({step_idx + 1} steps, {backprop_steps} backprop steps): {total_loss / max(backprop_steps, 1):.2f} | train " +
+                f"acc@1: {np.mean(total_accs):.3f} | acc@{args.top_k}: {np.mean(total_accs_k):.3f}"
             )
 
             # Save epoch model
@@ -260,9 +259,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
             if not args.skip_warmup_dev_eval:
                 # Dev evaluation
-                print("\n")
                 logger.info("Evaluating on the DEV set")
-                print("\n")
                 new_args = copy.deepcopy(args)
                 new_args.top_k = 10
                 new_args.test_path = args.dev_path
@@ -323,7 +320,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             args.load_dir = save_path
             target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
             best_acc = -1000.0
-            best_epoch = 0
+            best_epoch = -1
             # If warmup was executed, run dev eval before starting joint training
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
@@ -338,6 +335,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             }
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
+                best_epoch = 0
             if args.wandb:
                 wandb.log({
                     "joint_dev_eval/epoch": 0,
@@ -349,14 +347,12 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
         else:
             # Initially, save pre-trained model as the best model
             save_model(target_encoder, save_path)
-            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"joint_ep0"))
-
 
         # Initialize optimizer & scheduler
         target_encoder, optimizer, scheduler = get_optimizer_scheduler(target_encoder, args, len(train_qa_pairs[1]),
                                                                        len(dev_qa_pairs[1]),
                                                                        args.num_train_epochs)
-        # Weight factor for convex combination of the first- and second-hop loss values
+        # First-hop weight for convex combination of first- and second-hop loss values
         lmbda = args.joint_loss_lambda
         assert 0 <= lmbda <= 1
 
@@ -367,15 +363,12 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             total_accs_k = []
             total_u_accs = []
             total_u_accs_k = []
-            n_hop1_skipped = 0.  # Track how many first hops skipped
-            n_hop2_skipped = 0.  # Track how many second hops skipped
-            n_hop2_skipped_ans = 0.  # Track how many second hops skipped because of no valid final ans
-            n_hop2_skipped_evid = 0.  # Track how many second hops skipped because of no valid first hop evid
+            backprop_steps = 0.
 
             # Get questions and corresponding answers with other metadata
             q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
-            # Progress bar
+            # Joint training: 1st stage
             pbar = tqdm(get_top_phrases(
                 mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
                 args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
@@ -383,6 +376,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             )
             for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
+                n_hop1_skipped_ans = 0.  # Track how many first hops skipped because of no valid ans retrieval
+                n_hop1_skipped_easy = 0.  # Track how many first hops skipped because question was "easy"
+                n_hop2_skipped = 0.  # Track how many second hops skipped because of no valid ans retrieval
+                fhop_loss, ans_loss, loss = None, None, None
 
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
@@ -405,17 +402,16 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
                 # Target indices for doc
                 p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in p_tgts]
-                
+
                 # Create updated queries for second-hop search using filtered phrases in tgts
                 upd_queries = []
-                hop1_skip_cnt = 0.
                 for i, q in enumerate(questions):
                     # Skip "yes/no" questions
                     if normalize_answer(final_answers[i]) in ['yes', 'no']:
                         continue
                     # Retain the original query text for "easy" questions (i.e. store empty evidence)
                     if levels[i] == 'easy':
-                        hop1_skip_cnt += 1
+                        n_hop1_skipped_easy += 1
                         upd_q_id = q_ids[i] + "_uc"
                         upd_level = levels[i]
                         upd_evidence = ''
@@ -427,6 +423,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         )
                     else:
                         # Track first-hop evidence for non-"easy" questions
+                        if len(tgts_t[i]) == 0 and len(p_tgts_t[i]) == 0:
+                            n_hop1_skipped_ans += 1
                         for t in tgts_t[i][:args.top_k]:
                             t = int(t.item())
                             upd_q_id = q_ids[i] + f"_{t}"
@@ -441,10 +439,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             upd_queries.append(
                                 (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                             )
-                hop1_skip_cnt /= len(questions)
-                n_hop1_skipped += hop1_skip_cnt
+                n_hop1_skipped_ans /= len(questions)
+                n_hop1_skipped_easy /= len(questions)
 
-                # Train query encoder
+                # Compute first-hop loss
                 assert len(train_dataloader) == 1
                 for batch in train_dataloader:
                     batch = tuple(t.to(device) for t in batch)
@@ -455,162 +453,162 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         targets=tgts_t,
                         p_targets=p_tgts_t,
                     )
-
-                    # Optimize, get acc and report
                     if fhop_loss is not None:
                         if args.gradient_accumulation_steps > 1:
                             fhop_loss = fhop_loss / args.gradient_accumulation_steps
+                        total_accs += accs
+                        total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                    else:
+                        total_accs += [0.0] * len(tgts_t)
+                        total_accs_k += [0.0] * len(tgts_t)
 
-                        if accs is not None:
-                            total_accs += accs
-                            total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
-                        else:
-                            total_accs += [0.0] * len(tgts_t)
-                            total_accs_k += [0.0] * len(tgts_t)
-
-                        hop2_skipped, hop2_skipped_evid, hop2_skipped_ans = True, True, True
-                        if len(upd_queries) > 0:
-                            hop2_skipped, hop2_skipped_evid, hop2_skipped_ans = False, False, False
-                            # Joint training: 2nd stage
-                            upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, \
-                            upd_answers, upd_answer_titles = list(zip(*upd_queries))
-                            upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
-                            top_phrases_upd = get_top_phrases(
-                                mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
-                                target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
-                                upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
+                # Joint training: 2nd stage
+                total_u_accs_step = []
+                total_u_accs_k_step = []
+                # Skip 2nd-hop if no updated queries constructed
+                if len(upd_queries) > 0:
+                    upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, \
+                    upd_answers, upd_answer_titles = list(zip(*upd_queries))
+                    upd_questions = [uq + " " + upd_evidences[i] for i, uq in enumerate(upd_questions)]
+                    top_phrases_upd = get_top_phrases(
+                        mips, upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles,
+                        target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
+                        upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
+                    )
+                    u_loss_arr = []
+                    for upd_step_idx, (
+                            upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
+                            upd_answer_titles) in enumerate(top_phrases_upd):
+                        upd_train_dataloader, _, _ = get_question_dataloader(
+                            upd_questions, tokenizer, args.max_query_length,
+                            batch_size=args.per_gpu_train_batch_size
+                        )
+                        u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
+                                                                              to_arr(upd_answers, 2),
+                                                                              to_arr(upd_answer_titles, 2),
+                                                                              upd_outs, args,
+                                                                              label_strat=args.label_strat)
+                        # Start vectors
+                        u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
+                        # End vectors
+                        u_evs_t = torch.Tensor(u_evs).to(device)
+                        # Target indices for phrases
+                        u_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
+                                    u_tgts]
+                        # Target indices for doc
+                        u_p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
+                                      u_p_tgts]
+                        # Compute partial second-hop loss and store in u_loss_arr
+                        assert len(upd_train_dataloader) == 1
+                        for u_batch in upd_train_dataloader:
+                            u_batch = tuple(t.to(device) for t in u_batch)
+                            u_loss, u_accs = target_encoder.train_query(
+                                input_ids_=u_batch[0], attention_mask_=u_batch[1], token_type_ids_=u_batch[2],
+                                start_vecs=u_svs_t,
+                                end_vecs=u_evs_t,
+                                targets=u_tgts_t,
+                                p_targets=u_p_tgts_t,
                             )
-                            u_loss_arr = []
-                            for upd_step_idx, (
-                                    upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
-                                    upd_answer_titles) in enumerate(top_phrases_upd):
-                                upd_train_dataloader, _, _ = get_question_dataloader(
-                                    upd_questions, tokenizer, args.max_query_length,
-                                    batch_size=args.per_gpu_train_batch_size
-                                )
-                                u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
-                                                                                      to_arr(upd_answers, 2),
-                                                                                      to_arr(upd_answer_titles, 2),
-                                                                                      upd_outs, args,
-                                                                                      label_strat=args.label_strat)
-                                # Start vectors
-                                u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
-                                # End vectors
-                                u_evs_t = torch.Tensor(u_evs).to(device)
-                                # Target indices for phrases
-                                u_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
-                                          u_tgts]
-                                # Target indices for doc
-                                u_p_tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in
-                                            u_p_tgts]
-                                # Train query encoder
-                                assert len(upd_train_dataloader) == 1
-                                for u_batch in upd_train_dataloader:
-                                    u_batch = tuple(t.to(device) for t in u_batch)
-                                    u_loss, u_accs = target_encoder.train_query(
-                                        input_ids_=u_batch[0], attention_mask_=u_batch[1], token_type_ids_=u_batch[2],
-                                        start_vecs=u_svs_t,
-                                        end_vecs=u_evs_t,
-                                        targets=u_tgts_t,
-                                        p_targets=u_p_tgts_t,
-                                    )
-                                    if u_loss is not None:
-                                        if args.gradient_accumulation_steps > 1:
-                                            u_loss = u_loss / args.gradient_accumulation_steps
-                                        u_loss_arr.append(u_loss)
-                                        if u_accs is not None:
-                                            total_u_accs += u_accs
-                                            total_u_accs_k += [len(tgt) > 0 for tgt in u_tgts_t]
-                                        else:
-                                            total_u_accs += [0.0] * len(u_tgts_t)
-                                            total_u_accs_k += [0.0] * len(u_tgts_t)
-                            if len(u_loss_arr) == 0:
-                                hop2_skipped = True
+                            if u_loss is not None:
+                                if args.gradient_accumulation_steps > 1:
+                                    u_loss = u_loss / args.gradient_accumulation_steps
+                                u_loss_arr.append(u_loss)
+                                total_u_accs += u_accs
+                                total_u_accs_step += u_accs
+                                total_u_accs_k += [len(tgt) > 0 for tgt in u_tgts_t]
+                                total_u_accs_k_step += [len(tgt) > 0 for tgt in u_tgts_t]
+                                # Calculate number of upd_queries with no targets in this batch
+                                no_tgt = 0.
+                                for i in range(len(u_tgts_t)):
+                                    no_tgt += len(u_tgts_t[i]) == 0 and len(u_p_tgts_t[i]) == 0
+                                no_tgt /= len(u_tgts_t)
+                                n_hop2_skipped += no_tgt
+                            else:
                                 n_hop2_skipped += 1
-                                hop2_skipped_ans = True
-                                n_hop2_skipped_ans += 1
-                                # print()
-                                # logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid ans)")
-                                loss = fhop_loss
-                                ans_loss = torch.tensor(0)
-                            else:
-                                # Average ans_loss over total number of original questions
-                                ans_loss = sum(u_loss_arr) / (upd_step_idx + 1)
-
-                                # Final loss: combine first- and second-hop loss values
-                                loss = lmbda * fhop_loss + (1 - lmbda) * ans_loss
-                        else:
-                            hop2_skipped = True
-                            n_hop2_skipped += 1
-                            hop2_skipped_evid = True
-                            n_hop2_skipped_evid += 1
-                            # print()
-                            # logger.info(f"Ep{ep_idx + 1}_step{step_idx + 1}: Second-hop skipped (no valid evidence)")
+                                total_u_accs += [0.0] * len(u_tgts_t)
+                                total_u_accs_step += [0.0] * len(u_tgts_t)
+                                total_u_accs_k += [0.0] * len(u_tgts_t)
+                                total_u_accs_k_step += [0.0] * len(u_tgts_t)
+                    n_hop2_skipped /= (upd_step_idx + 1)
+                    if len(u_loss_arr) == 0:
+                        n_hop2_skipped = 1
+                        if fhop_loss is not None:
                             loss = lmbda * fhop_loss
-                            ans_loss = torch.tensor(0)
+                    else:
+                        # Average ans_loss over total number of original questions
+                        ans_loss = sum(u_loss_arr) / len(u_loss_arr)
+                        # Final loss: combine first- and second-hop loss values
+                        if fhop_loss is not None:
+                            loss = lmbda * fhop_loss + (1 - lmbda) * ans_loss
+                        else:
+                            loss = (1 - lmbda) * ans_loss
+                else:
+                    n_hop2_skipped = 1
+                    if fhop_loss is not None:
+                        loss = lmbda * fhop_loss
 
-                        if type(loss) is torch.Tensor:
-                            # Backpropagate combined loss and update model
-                            try:
-                                if args.fp16:
-                                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                                        scaled_loss.backward()
-                                else:
-                                    loss.backward()
-                            except:
-                                logger.info("ERROR: loss.backward()")
-                                logger.info(f"Number of updated queries: {len(upd_queries)}")
-                                raise ValueError("loss.backward()")
+                if type(loss) is torch.Tensor:  # Not checking "if None" since loss could also just be a 0
+                    backprop_steps += 1
+                    # Backpropagate combined loss and update model
+                    try:
+                        if args.fp16:
+                            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                                scaled_loss.backward()
+                        else:
+                            loss.backward()
+                    except:
+                        logger.info("ERROR: loss.backward()")
+                        logger.info(f"Number of updated queries: {len(upd_queries)}")
+                        raise ValueError("loss.backward()")
 
-                            total_loss += loss.item()
-                            if args.fp16:
-                                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                            else:
-                                torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
-                            optimizer.step()
-                            scheduler.step()  # Update learning rate schedule
-                            target_encoder.zero_grad()
+                    total_loss += loss.item()
+                    if args.fp16:
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(target_encoder.parameters(), args.max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()  # Update learning rate schedule
+                    target_encoder.zero_grad()
 
-                            pbar.set_description(
-                                f"Ep{ep_idx + 1}_step{step_idx + 1}: loss: {loss.item():.2f}, " +
-                                f"acc1: {sum(total_accs) / len(total_accs):.3f}, " +
-                                "acc2: " + ("skipped" if hop2_skipped else f"{sum(total_u_accs) / len(total_u_accs):.3f}")
-                            )
+                    pbar.set_description(
+                        f"Ep{ep_idx + 1}_step{step_idx + 1}: loss: {loss.item():.2f}, " +
+                        f"acc1: " + ("skipped, " if fhop_loss is None else f"{np.mean(total_accs[-1]):.3f}, ") +
+                        "acc2: " + ("skipped" if n_hop2_skipped == 1 else f"{np.mean(total_u_accs_step):.3f}")
+                    )
+                else:
+                    pbar.set_description(f"Ep{ep_idx + 1}_step{step_idx + 1}: loss: skipped")
 
-                            if args.wandb:
-                                wandb.log({
-                                    "joint_train/epoch": ep_idx + 1,
-                                    "joint_train/first_hop_loss": fhop_loss.item(),
-                                    "joint_train/second_hop_loss": float('inf') if hop2_skipped else ans_loss.item(),
-                                    "joint_train/joint_loss": loss.item(),
-                                    "joint_train/avg_total_loss": total_loss / (step_idx + 1),
-                                    "joint_train/first_hop_acc@1": 0. if hop1_skip_cnt == 1 else np.mean(total_accs[-1]),  # np.mean(total_accs),
-                                    f"joint_train/first_hop_acc@{args.top_k}": 0. if hop1_skip_cnt == 1 else np.mean(total_accs_k[-1]),  # np.mean(total_accs_k),
-                                    "joint_train/second_hop_acc@1": 0. if hop2_skipped else np.mean(total_u_accs[-1]),  # np.mean(total_u_accs),
-                                    f"joint_train/second_hop_acc@{args.top_k}": 0. if hop2_skipped else np.mean(total_u_accs_k[-1]),  #np.mean(total_u_accs_k),
-                                    f"joint_train/first_hop_skipped": hop1_skip_cnt,  # n_hop1_skipped / (step_idx + 1),
-                                    f"joint_train/second_hop_skipped": int(hop2_skipped),  # n_hop2_skipped / (step_idx + 1),
-                                    f"joint_train/second_hop_skipped_ans": int(hop2_skipped_ans),
-                                    f"joint_train/second_hop_skipped_evid": int(hop2_skipped_evid),
-                                })
+                if args.wandb:
+                    wandb.log({
+                        "joint_train/epoch": ep_idx + 1,
+                        "joint_train/first_hop_loss": float('inf') if fhop_loss is None else fhop_loss.item(),
+                        "joint_train/second_hop_loss": float('inf') if n_hop2_skipped == 1 else ans_loss.item(),
+                        "joint_train/joint_loss": float('inf') if type(loss) is not torch.Tensor else loss.item(),
+                        "joint_train/avg_total_loss": float('inf') if type(loss) is not torch.Tensor else total_loss / max(backprop_steps, 1),
+                        "joint_train/first_hop_acc@1": float('inf') if fhop_loss is None else np.mean(total_accs[-1]),
+                        f"joint_train/first_hop_acc@{args.top_k}": float('inf') if fhop_loss is None else np.mean(total_accs_k[-1]),
+                        "joint_train/second_hop_acc@1": float('inf') if n_hop2_skipped == 1 else np.mean(total_u_accs_step),
+                        f"joint_train/second_hop_acc@{args.top_k}": float('inf') if n_hop2_skipped == 1 else np.mean(total_u_accs_k_step),
+                        f"joint_train/first_hop_skipped_easy": n_hop1_skipped_easy,
+                        f"joint_train/first_hop_skipped_ans": n_hop1_skipped_ans,
+                        f"joint_train/second_hop_skipped_ans": n_hop2_skipped,
+                    })
 
-            step_idx += 1
             logger.info(
-                f"Avg train loss ({step_idx} iterations): {total_loss / step_idx:.3f} | "
+                f"Avg train loss ({step_idx + 1} steps, {backprop_steps} backprop steps): {total_loss / max(backprop_steps, 1):.3f} | "
                 +
                 f"(first-hop) acc@1: {np.mean(total_accs):.3f}, " +
                 f"acc@{args.top_k}: {np.mean(total_accs_k):.3f} "
                 +
                 f"| (second-hop) acc@1: {np.mean(total_u_accs):.3f}, " +
                 f"acc@{args.top_k}: {np.mean(total_u_accs_k):.3f} "
-                +
-                f"| n_hop2_skipped: {n_hop2_skipped / step_idx:.3f}"
             )
 
+            # Save epoch model
+            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
+
             # Dev evaluation
-            print("\n")
             logger.info("Evaluating on the DEV set")
-            print("\n")
             new_args = copy.deepcopy(args)
             new_args.top_k = 10
             new_args.test_path = args.dev_path
@@ -623,7 +621,6 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 "phrase": dev_em,
                 "phrase_k": dev_emk,
                 # TODO: Add any other dev metrics for joint training?
-                # TODO: Remove duplication of this code block (I think there are 3 of these in this file)
             }
             logger.info(f"Dev set acc@1: {dev_em:.3f}, f1@1: {dev_f1:.3f}")
 
@@ -636,8 +633,6 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                     f"joint_dev_eval/f1@{new_args.top_k}": dev_f1k
                 })
 
-            # Save epoch model
-            last_saved_path = save_model(target_encoder, os.path.join(save_path, f"joint_ep{ep_idx + 1}"))
             # Save best model
             if dev_metrics[args.dev_metric] > best_acc:
                 best_acc = dev_metrics[args.dev_metric]
