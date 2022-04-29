@@ -60,7 +60,8 @@ def to_arr(arr, d):
 
 
 def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, firsthop=False, multihop=False,
-             save_pred=None, pred_fname_suffix="", data_path=None, agg_strat=None, save_path=None):
+             save_pred=None, pred_fname_suffix="", data_path=None, agg_strat=None, save_path=None,
+             always_return_sent=False):
     # Set path to load evaluation data
     data_path = data_path if data_path is not None else args.test_path
 
@@ -120,7 +121,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         # Set aggregation strategy
         agg_strat = agg_strat if agg_strat is not None else 'opt2a' if firsthop else args.agg_strat
         # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
-        return_sent = agg_strat == "opt2a"
+        return_sent = always_return_sent or agg_strat == "opt2a"
         logger.info(f'Aggregation strategy used: {agg_strat}')
 
         predictions = []
@@ -163,13 +164,13 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     # Evaluation for multi-hop scenario
 
     # Set aggregation strategies for both hops
-    fhop_agg_strat = (agg_strat[0] if agg_strat is list else agg_strat) \
+    fhop_agg_strat = (agg_strat[0] if type(agg_strat) in [tuple, list] else agg_strat) \
         if agg_strat is not None else args.warmup_agg_strat
-    agg_strat = (agg_strat[1] if agg_strat is list else agg_strat) \
+    agg_strat = (agg_strat[1] if type(agg_strat) in [tuple, list] else agg_strat) \
         if agg_strat is not None else args.agg_strat
     # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
-    fhop_return_sent = fhop_agg_strat == "opt2a"
-    return_sent = agg_strat == "opt2a"
+    fhop_return_sent = always_return_sent or fhop_agg_strat == "opt2a"
+    return_sent = always_return_sent or agg_strat == "opt2a"
     logger.info(f'Aggregation strategy used: {fhop_agg_strat}, {agg_strat}')
 
     scores = []
@@ -183,7 +184,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             query_vec[q_idx:q_idx+step],
             q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
             top_k=args.hop_top_k, max_answer_length=args.max_answer_length,
-            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True,
+            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=fhop_return_sent,
             prune_low_preds=True
         )
 
@@ -215,7 +216,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
             final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe,
                                        top_k=args.top_k, max_answer_length=args.max_answer_length,
-                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True,
+                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent,
                                        prune_low_preds=False)
 
             final_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in

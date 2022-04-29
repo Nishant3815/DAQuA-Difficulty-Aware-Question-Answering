@@ -266,7 +266,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 new_args.load_dir = last_saved_path
                 eval_res = evaluate(new_args, mips=mips, tokenizer=tokenizer, firsthop=True,
                                     pred_fname_suffix=f"warmup_ep{ep_idx + 1}", save_path=save_path,
-                                    save_pred=True)
+                                    save_pred=True, always_return_sent=True, agg_strat=args.warmup_agg_strat)
                 dev_em, dev_f1, dev_emk, dev_f1k = eval_res[0]
                 evid_dev_em, evid_dev_f1, evid_dev_emk, evid_dev_f1k = eval_res[1]
                 joint_substr_f1, joint_substr_f1k = eval_res[2]
@@ -309,7 +309,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             if args.wandb:
                 wandb.run.summary["best_accuracy_warmup"] = best_acc
                 wandb.run.summary["best_epoch_warmup"] = best_epoch
-                wandb.run.summary["best_model_path"] = save_path
+                wandb.run.summary["best_model_warmup"] = os.path.join(save_path, f"warmup_ep{best_epoch}")
 
     if not args.warmup_only:
         logger.info(f"Starting (full) joint training")
@@ -327,7 +327,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             new_args.test_path = args.dev_path
             dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
                                                         pred_fname_suffix="joint_ep0", save_path=save_path,
-                                                        save_pred=True)
+                                                        save_pred=True, always_return_sent=True,
+                                                        agg_strat=(args.warmup_agg_strat, args.agg_strat))
             # Dev metric to use for picking the best epoch
             dev_metrics = {
                 "phrase": dev_em,
@@ -615,7 +616,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             new_args.load_dir = last_saved_path
             dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
                                                         pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
-                                                        save_pred=True)
+                                                        save_pred=True, always_return_sent=True,
+                                                        agg_strat=(args.warmup_agg_strat, args.agg_strat))
             # Warm-up dev metric to use for picking the best epoch
             dev_metrics = {
                 "phrase": dev_em,
@@ -793,7 +795,8 @@ if __name__ == '__main__':
                 if not args.skip_warmup:
                     # Evaluate warmup (first-hop) stage
                     res = evaluate(args, mips, firsthop=True, save_pred=True, pred_fname_suffix="warmup_ep0",
-                                   data_path=paths_to_eval[split], save_path=save_path)
+                                   data_path=paths_to_eval[split], save_path=save_path, always_return_sent=True,
+                                   agg_strat=args.warmup_agg_strat)
                     if split == 'dev':
                         dev_metrics = {
                             "phrase": res[0][0],  # phr_em_top1: phrase metric @1 on the dev set
@@ -821,7 +824,8 @@ if __name__ == '__main__':
                 else:
                     # Evaluate joint (multi-hop) stage
                     res = evaluate(args, mips, multihop=True, save_pred=True, pred_fname_suffix="joint_ep0",
-                                   data_path=paths_to_eval[split], save_path=save_path)
+                                   data_path=paths_to_eval[split], save_path=save_path, always_return_sent=True,
+                                   agg_strat=(args.warmup_agg_strat, args.agg_strat))
                     # If skipping warmup training, initialize dev acc with the joint eval
                     if split == 'dev':
                         dev_metrics = {
@@ -854,7 +858,9 @@ if __name__ == '__main__':
             for split in paths:
                 logger.info(f"Final: Evaluating {args.load_dir} on the {split.upper()} set")
                 res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path,
+                               always_return_sent=True, agg_strat=(args.warmup_agg_strat
+                               if args.warmup_only else (args.warmup_agg_strat, args.agg_strat)))
                 if args.wandb:
                     wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
                     if args.warmup_only:
@@ -889,14 +895,17 @@ if __name__ == '__main__':
             if not args.ret_multi_stage_model:
                 logger.info(f"Evaluating {args.load_dir} on the {split.upper()} set")
                 res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path,
+                               always_return_sent=True)
             else:
                 logger.info(f"Evaluation of {split.upper()} set done using warmup model on first stage and pretrained model on second stage")
                 args.ret_both_warm_pretrain = True
                 device = 'cuda' if args.cuda else 'cpu'
                 ptrained_model, warmup_model, tokenizer_model, _ = load_encoder(device, args, query_only=True)
-                res = evaluate(args, mips, (ptrained_model, warmup_model), tokenizer_model, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                            multihop=(not args.warmup_only), save_pred=True, save_path=save_path)
+                res = evaluate(args, mips, (ptrained_model, warmup_model), tokenizer_model,
+                               data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path,
+                               always_return_sent=True)
 
             if args.wandb:
                 wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
