@@ -60,7 +60,8 @@ def to_arr(arr, d):
 
 
 def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, firsthop=False, multihop=False,
-             save_pred=None, pred_fname_suffix="", data_path=None, agg_strat=None, save_path=None):
+             save_pred=None, pred_fname_suffix="", data_path=None, agg_strat=None, save_path=None,
+             always_return_sent=False):
     # Set path to load evaluation data
     data_path = data_path if data_path is not None else args.test_path
 
@@ -93,12 +94,19 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
+    
+    if type(query_encoder)==tuple:
+        # Leveraged we want to encode using warmup_model at first hop and pretrained model at second hop
+        logger.info(f'Pretrained query encoder loaded from {args.load_dir} and warmup query encoder loaded from {args.load_warmup_dir}')
+        ptrained_query_encoder, warmup_query_encoder = query_encoder
+        query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
 
-    if query_encoder is None:
-        logger.info(f'Query encoder will be loaded from {args.load_dir}')
-        device = 'cuda' if args.cuda else 'cpu'
-        query_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
-    query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
+    else:
+        if query_encoder is None:
+            logger.info(f'Query encoder will be loaded from {args.load_dir}')
+            device = 'cuda' if args.cuda else 'cpu'
+            query_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+        query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
 
     # Load MIPS
     if mips is None:
@@ -113,7 +121,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
         # Set aggregation strategy
         agg_strat = agg_strat if agg_strat is not None else 'opt2a' if firsthop else args.agg_strat
         # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
-        return_sent = agg_strat == "opt2a"
+        return_sent = always_return_sent or agg_strat == "opt2a"
         logger.info(f'Aggregation strategy used: {agg_strat}')
 
         predictions = []
@@ -156,13 +164,13 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     # Evaluation for multi-hop scenario
 
     # Set aggregation strategies for both hops
-    fhop_agg_strat = (agg_strat[0] if agg_strat is list else agg_strat) \
+    fhop_agg_strat = (agg_strat[0] if type(agg_strat) in [tuple, list] else agg_strat) \
         if agg_strat is not None else args.warmup_agg_strat
-    agg_strat = (agg_strat[1] if agg_strat is list else agg_strat) \
+    agg_strat = (agg_strat[1] if type(agg_strat) in [tuple, list] else agg_strat) \
         if agg_strat is not None else args.agg_strat
     # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
-    fhop_return_sent = fhop_agg_strat == "opt2a"
-    return_sent = agg_strat == "opt2a"
+    fhop_return_sent = always_return_sent or fhop_agg_strat == "opt2a"
+    return_sent = always_return_sent or agg_strat == "opt2a"
     logger.info(f'Aggregation strategy used: {fhop_agg_strat}, {agg_strat}')
 
     scores = []
@@ -176,7 +184,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             query_vec[q_idx:q_idx+step],
             q_texts=questions[q_idx:q_idx+step], nprobe=args.nprobe,
             top_k=args.hop_top_k, max_answer_length=args.max_answer_length,
-            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=True,
+            aggregate=args.aggregate, agg_strat=fhop_agg_strat, return_sent=fhop_return_sent,
             prune_low_preds=True
         )
 
@@ -201,11 +209,14 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 continue
 
             upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
-            upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
+            if type(query_encoder)==tuple:
+                upd_query_vec = embed_all_query(upd_queries, args, ptrained_query_encoder, tokenizer, silent=True)
+            else:
+                upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
 
             final_result = mips.search(upd_query_vec, q_texts=upd_queries, nprobe=args.nprobe,
                                        top_k=args.top_k, max_answer_length=args.max_answer_length,
-                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=True,
+                                       aggregate=args.aggregate, agg_strat=agg_strat, return_sent=return_sent,
                                        prune_low_preds=False)
 
             final_pred_unpad = [[ret['answer'] for ret in out][:args.top_k] if len(out) > 0 else [] for out in
@@ -783,6 +794,9 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
+    
+    if args.ret_both_warm_pretrain:
+        raise NotImplementedError
 
     if args.run_mode == 'eval':
         evaluate(args)
