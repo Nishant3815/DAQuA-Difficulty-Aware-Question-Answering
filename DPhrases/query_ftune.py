@@ -132,7 +132,11 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     # Freeze one for MIPS
     device = 'cuda' if args.cuda else 'cpu'
     logger.info("Loading pretrained encoder: this one is for MIPS (fixed)")
-    target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+    if not args.ret_multi_stage_model:
+        target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+    elif args.ret_multi_stage_model:
+        args.ret_both_warm_pretrain = True
+        target_encoder, warmup_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
 
     # MIPS
     if mips is None:
@@ -370,11 +374,19 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             q_ids, levels, questions, answers, titles, final_answers, final_titles = shuffle_data(train_qa_pairs, args)
 
             # Joint training: 1st stage
-            pbar = tqdm(get_top_phrases(
-                mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
-                args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
-                always_return_sent=True)
-            )
+            if not args.ret_multi_stage_model:
+                pbar = tqdm(get_top_phrases(
+                    mips, q_ids, levels, questions, answers, titles, target_encoder, tokenizer,  # encoder updated every epoch
+                    args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
+                    always_return_sent=True)
+                )
+            elif args.ret_multi_stage_model:
+                pbar = tqdm(get_top_phrases(
+                    mips, q_ids, levels, questions, answers, titles, warmup_encoder, tokenizer,  # use warmup encoder every epoch
+                    args.per_gpu_train_batch_size, args, final_answers, final_titles, agg_strat=args.warmup_agg_strat,
+                    always_return_sent=True)
+                )
+
             for step_idx, (q_ids, levels, questions, answers, titles, outs, final_answers, final_titles) in enumerate(pbar):
                 # INFO: `outs` contains topk phrases for each query
                 n_hop1_skipped_ans = 0.  # Track how many first hops skipped because of no valid ans retrieval
@@ -451,23 +463,48 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
 
                 # Compute first-hop loss
                 assert len(train_dataloader) == 1
-                for batch in train_dataloader:
-                    batch = tuple(t.to(device) for t in batch)
-                    fhop_loss, accs = target_encoder.train_query(
-                        input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
-                        start_vecs=svs_t,
-                        end_vecs=evs_t,
-                        targets=tgts_t,
-                        p_targets=p_tgts_t,
-                    )
-                    if fhop_loss is not None:
-                        if args.gradient_accumulation_steps > 1:
-                            fhop_loss = fhop_loss / args.gradient_accumulation_steps
-                        total_accs += accs
-                        total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
-                    else:
-                        total_accs += [0.0] * len(tgts_t)
-                        total_accs_k += [0.0] * len(tgts_t)
+                if not args.ret_multi_stage_model:
+
+                    for batch in train_dataloader:
+                        batch = tuple(t.to(device) for t in batch)
+                        fhop_loss, accs = target_encoder.train_query(
+                            input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                            start_vecs=svs_t,
+                            end_vecs=evs_t,
+                            targets=tgts_t,
+                            p_targets=p_tgts_t,
+                        )
+                        if fhop_loss is not None:
+                            if args.gradient_accumulation_steps > 1:
+                                fhop_loss = fhop_loss / args.gradient_accumulation_steps
+                            total_accs += accs
+                            total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                        else:
+                            total_accs += [0.0] * len(tgts_t)
+                            total_accs_k += [0.0] * len(tgts_t)
+                
+                elif args.ret_multi_stage_model:
+                    # We don't want to update our pretrained model
+                    with torch.no_grad():
+        
+                        for batch in train_dataloader:
+                            batch = tuple(t.to(device) for t in batch)
+                            fhop_loss, accs = target_encoder.train_query(
+                                input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                                start_vecs=svs_t,
+                                end_vecs=evs_t,
+                                targets=tgts_t,
+                                p_targets=p_tgts_t,
+                            )
+                            if fhop_loss is not None:
+                                if args.gradient_accumulation_steps > 1:
+                                    fhop_loss = fhop_loss / args.gradient_accumulation_steps
+                                total_accs += accs
+                                total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                            else:
+                                total_accs += [0.0] * len(tgts_t)
+                                total_accs_k += [0.0] * len(tgts_t)
+
 
                 # Joint training: 2nd stage
                 total_u_accs_step = []
@@ -620,10 +657,18 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
             new_args.top_k = 10
             new_args.test_path = args.dev_path
             new_args.load_dir = last_saved_path
-            dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
-                                                        pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
-                                                        save_pred=True, always_return_sent=True,
-                                                        agg_strat=(args.warmup_agg_strat, args.agg_strat))
+            if not args.ret_multi_stage_model:
+                dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, mips=mips, tokenizer=tokenizer, multihop=True,
+                                                            pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
+                                                            save_pred=True, always_return_sent=True,
+                                                            agg_strat=(args.warmup_agg_strat, args.agg_strat))
+            
+            elif args.ret_multi_stage_model:
+                dev_em, dev_f1, dev_emk, dev_f1k = evaluate(new_args, query_encoder=(target_encoder, warmup_encoder), mips=mips, tokenizer=tokenizer, multihop=True,
+                                                            pred_fname_suffix=f"joint_ep{ep_idx + 1}", save_path=save_path,
+                                                            save_pred=True, always_return_sent=True,
+                                                            agg_strat=(args.warmup_agg_strat, args.agg_strat))
+
             # Warm-up dev metric to use for picking the best epoch
             dev_metrics = {
                 "phrase": dev_em,
@@ -862,11 +907,22 @@ if __name__ == '__main__':
             print()
             paths = paths_to_eval if args.eval_all_splits else {'test': paths_to_eval['test']}
             for split in paths:
-                logger.info(f"Final: Evaluating {args.load_dir} on the {split.upper()} set")
-                res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
-                               multihop=(not args.warmup_only), save_pred=True, save_path=save_path,
-                               always_return_sent=True, agg_strat=(args.warmup_agg_strat
-                               if args.warmup_only else (args.warmup_agg_strat, args.agg_strat)))
+                if not args.ret_multi_stage_model:
+                    logger.info(f"Final: Evaluating {args.load_dir} on the {split.upper()} set")
+                    res = evaluate(args, mips, data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                                multihop=(not args.warmup_only), save_pred=True, save_path=save_path,
+                                always_return_sent=True, agg_strat=(args.warmup_agg_strat
+                                if args.warmup_only else (args.warmup_agg_strat, args.agg_strat)))
+                elif args.ret_multi_stage_model:
+                    args.ret_both_warm_pretrain = True
+                    device = 'cuda' if args.cuda else 'cpu'
+                    ptrained_model, warmup_model, tokenizer_model, _ = load_encoder(device, args, query_only=True)
+                    logger.info(f"Final Evaluation of {split.upper()} set done using warmup model on first stage and pretrained model on second stage")
+                    res = evaluate(args, mips, (ptrained_model, warmup_model), data_path=paths_to_eval[split], firsthop=args.warmup_only,
+                                multihop=True, save_pred=True, save_path=save_path,
+                                always_return_sent=True, agg_strat=(args.warmup_agg_strat
+                                if args.warmup_only else (args.warmup_agg_strat, args.agg_strat)))
+
                 if args.wandb:
                     wandb_panel = f"{'warmup' if args.warmup_only else 'joint'}_{split}_eval"
                     if args.warmup_only:
