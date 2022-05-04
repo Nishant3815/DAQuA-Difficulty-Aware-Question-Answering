@@ -395,9 +395,14 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 # End vectors
                 evs_t = torch.Tensor(evs).to(device)
 
-                # Update tgt and p_tgt to filter out loss contributions from easy questions 
-                tgts = [[None] * len(tgt) if lev == 'easy' else tgt for tgt, lev in zip(tgts, levels)]
-                p_tgts = [[None] * len(p_tgt) if lev == 'easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+                if not args.skip_first_hop:
+                    # Update tgt and p_tgt to filter out loss contributions from easy questions 
+                    tgts = [[None] * len(tgt) if lev == 'easy' else tgt for tgt, lev in zip(tgts, levels)]
+                    p_tgts = [[None] * len(p_tgt) if lev == 'easy' else p_tgt for p_tgt, lev in zip(p_tgts, levels)]
+                else:
+                    # Update tgt and p_tgt to filter out first hop loss contributions from all questions 
+                    tgts = [[None] * len(tgt) for tgt in tgts]
+                    p_tgts = [[None] * len(p_tgt) for p_tgt in p_tgts]
 
                 # Target indices for phrases
                 tgts_t = [torch.Tensor([tgt_ for tgt_ in tgt if tgt_ is not None]).to(device) for tgt in tgts]
@@ -411,8 +416,9 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                     if normalize_answer(final_answers[i]) in ['yes', 'no']:
                         continue
                     # Retain the original query text for "easy" questions (i.e. store empty evidence)
-                    if levels[i] == 'easy':
-                        n_hop1_skipped_easy += 1
+                    if levels[i] == 'easy' or args.skip_first_hop:
+                        if not args.skip_first_hop:
+                            n_hop1_skipped_easy += 1
                         upd_q_id = q_ids[i] + "_uc"
                         upd_level = levels[i]
                         upd_evidence = ''
