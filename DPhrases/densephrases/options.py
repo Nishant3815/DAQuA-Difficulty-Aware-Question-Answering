@@ -240,6 +240,8 @@ class Options():
                         const=True, default=False,  help="Separate out the correct and incorrect predictions in the final .pred file for easier error analysis.")
         self.parser.add_argument("--no_shuffle", action='store_true', default=False,
                                  help="Prevent loaded qa pairs from being shuffled")
+        self.parser.add_argument('--search_k', type=int, default=None,
+                                 help="Number of candidates to search for before the aggregation strategy is applied")
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
