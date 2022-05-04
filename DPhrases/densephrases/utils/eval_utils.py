@@ -67,6 +67,14 @@ def drqa_substr_match_score(prediction, ground_truth):
     return norm_pred != '' and norm_pred in normalize_answer(ground_truth)
 
 
+def drqa_f1_match_score(prediction, ground_truth, f1_threshold=None):
+    """Check if the f1 score of the prediction and the ground truth is above a given threshold."""
+    if f1_threshold is None:
+        # Return the f1 score if there is a substr match; else return 0
+        return f1_score(prediction, ground_truth)[0]
+    return f1_score(prediction, ground_truth)[0] >= f1_threshold
+
+
 def drqa_substr_exact_match_score(pred_substr, pred_exact, ground_truth):
     """
     Check if pred_substr is a (soft) substring match with the ground truth
