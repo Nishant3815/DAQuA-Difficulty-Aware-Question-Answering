@@ -16,7 +16,7 @@ from densephrases.utils.single_utils import load_encoder
 from densephrases.utils.open_utils import load_phrase_index, get_query2vec, load_qa_pairs, shuffle_data
 from densephrases.utils.eval_utils import drqa_exact_match_score, drqa_regex_match_score, \
     drqa_metric_max_over_ground_truths, drqa_substr_match_score, drqa_substr_f1_match_score, \
-    normalize_answer
+    normalize_answer, drqa_f1_match_score
 from eval_phrase_retrieval import evaluate, to_arr
 from densephrases import Options
 
@@ -789,6 +789,22 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         targets = [
             [drqa_metric_max_over_ground_truths(match_fn, phrase['answer'], answer_set)
              for phrase in phrase_group]  # phrase_group is the top-k predictions
+            for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
+        ]
+        targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]
+
+    # Annotate for L_phrase
+    # Checking if the prediction and ground-truth is a soft match using an f1 score threshold
+    if 'phrase2' in label_strat.split(','):
+        match_fns = [
+            drqa_regex_match_score if args.regex or ('trec' in q_id.lower()) else drqa_f1_match_score for q_id in
+            q_ids
+        ]
+        targets = [
+            [drqa_metric_max_over_ground_truths(match_fn, {
+                'prediction': phrase['answer'],
+                'f1_threshold': args.ans_f1_threshold
+            }, answer_set) for phrase in phrase_group]  # phrase_group is the top-k predictions
             for phrase_group, answer_set, match_fn in zip(phrase_groups, answers, match_fns)
         ]
         targets = [[ii if val else None for ii, val in enumerate(target)] for target in targets]

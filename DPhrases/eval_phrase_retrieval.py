@@ -98,7 +98,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if type(query_encoder)==tuple:
         # Leveraged we want to encode using warmup_model at first hop and pretrained model at second hop
         logger.info(f'Pretrained query encoder loaded from {args.load_dir} and warmup query encoder loaded from {args.load_warmup_dir}')
-        ptrained_query_encoder, warmup_query_encoder = query_encoder
+        joint_query_encoder, warmup_query_encoder = query_encoder
         query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
 
     else:
@@ -188,10 +188,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             prune_low_preds=True
         )
 
-        if not args.upd_sent_evd:
-            fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
-        else:
-            fhop_pred_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
+        fhop_pred_unpad = [[ret['answer'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_evid_unpad = [[ret['context'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_title_unpad = [[ret['title'][0] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
         fhop_score_unpad = [[ret['score'] for ret in out][:args.hop_top_k] if len(out) > 0 else [] for out in fhop_result]
@@ -208,9 +205,12 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 pred_chains.append([['', '']]*args.hop_top_k)
                 continue
 
-            upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
-            if type(query_encoder)==tuple:
-                upd_query_vec = embed_all_query(upd_queries, args, ptrained_query_encoder, tokenizer, silent=True)
+            if args.upd_sent_evd:
+                upd_queries = [(fh_ques + " " + pred_evid) for pred_evid in fh_evids]
+            else:
+                upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
+            if type(query_encoder) == tuple:
+                upd_query_vec = embed_all_query(upd_queries, args, joint_query_encoder, tokenizer, silent=True)
             else:
                 upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
 
