@@ -479,26 +479,29 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             total_accs_k += [0.0] * len(tgts_t)
                 
                 elif args.ret_multi_stage_model:
+                    fhop_loss = None
+                    total_accs += [0.0] * len(tgts_t)
+                    total_accs_k += [0.0] * len(tgts_t)
                     # We don't want to update our pretrained model
-                    with torch.no_grad():
-        
-                        for batch in train_dataloader:
-                            batch = tuple(t.to(device) for t in batch)
-                            fhop_loss, accs = target_encoder.train_query(
-                                input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
-                                start_vecs=svs_t,
-                                end_vecs=evs_t,
-                                targets=tgts_t,
-                                p_targets=p_tgts_t,
-                            )
-                            if fhop_loss is not None:
-                                if args.gradient_accumulation_steps > 1:
-                                    fhop_loss = fhop_loss / args.gradient_accumulation_steps
-                                total_accs += accs
-                                total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
-                            else:
-                                total_accs += [0.0] * len(tgts_t)
-                                total_accs_k += [0.0] * len(tgts_t)
+                    # with torch.no_grad():
+                    #
+                    #     for batch in train_dataloader:
+                    #         batch = tuple(t.to(device) for t in batch)
+                    #         fhop_loss, accs = target_encoder.train_query(
+                    #             input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
+                    #             start_vecs=svs_t,
+                    #             end_vecs=evs_t,
+                    #             targets=tgts_t,
+                    #             p_targets=p_tgts_t,
+                    #         )
+                    #         if fhop_loss is not None:
+                    #             if args.gradient_accumulation_steps > 1:
+                    #                 fhop_loss = fhop_loss / args.gradient_accumulation_steps
+                    #             total_accs += accs
+                    #             total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
+                    #         else:
+                    #             total_accs += [0.0] * len(tgts_t)
+                    #             total_accs_k += [0.0] * len(tgts_t)
 
 
                 # Joint training: 2nd stage
