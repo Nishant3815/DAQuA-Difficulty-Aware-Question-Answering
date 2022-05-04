@@ -216,6 +216,8 @@ class Options():
                         const=True, default=False, help="Whether to perform the initial/final evals on all data splits or not")
         self.parser.add_argument("--evidence_f1_threshold", default=0.7, type=float,
                                  help="F1 score threshold b/w evidence and gold SUP sentence to pick training targets")
+        self.parser.add_argument("--ans_f1_threshold", default=0.7, type=float,
+                                 help="F1 score threshold b/w prediction and gold answer to pick training targets")
         self.parser.add_argument('--warmup_dev_metric', default='joint', type=str,
                                  help="Metric to decide best epoch for warmup training: phrase | evidence | joint")
         self.parser.add_argument('--dev_metric', default='phrase', type=str,
