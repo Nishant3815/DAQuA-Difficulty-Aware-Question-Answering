@@ -92,25 +92,6 @@ def load_encoder(device, args, phrase_only=False, query_only=False):
         )
         logger.info(f'DensePhrases encoder loaded from {args.load_dir}')
 
-    if args.load_warmup_dir:
-        # Load warmup model for split case hypothesis testing 
-        warmup_model_path = args.load_warmup_dir
-        load_class_2 = partial(
-            Encoder.from_pretrained,
-            pretrained_model_name_or_path=warmup_model_path,
-            cache_dir=args.cache_dir if args.cache_dir else None,
-        )
-        warmup_model = load_class_2(
-            config=config,
-            tokenizer=tokenizer,
-            transformer_cls=MODEL_MAPPING[config.__class__],
-            pretrained=copy.deepcopy(pretrained) if pretrained is not None else None,
-            lambda_kl=getattr(args, 'lambda_kl', 0.0),
-            lambda_neg=getattr(args, 'lambda_neg', 0.0),
-            lambda_flt=getattr(args, 'lambda_flt', 0.0),
-        )
-
-
     # DensePhrases encoder object
     model = load_class(
         config=config,
@@ -122,6 +103,27 @@ def load_encoder(device, args, phrase_only=False, query_only=False):
         lambda_flt=getattr(args, 'lambda_flt', 0.0),
     )
 
+    if args.load_warmup_dir:
+        # Load warmup (first-hop) model
+        if args.load_warmup_dir.startswith('princeton-nlp'):
+            hf_warmup_model_path = f"https://huggingface.co/{args.load_warmup_dir}/resolve/main/pytorch_model.bin"
+        else:
+            hf_warmup_model_path = args.load_warmup_dir
+        load_class_2 = partial(
+            Encoder.from_pretrained,
+            pretrained_model_name_or_path=hf_warmup_model_path,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
+        warmup_model = load_class_2(
+            config=config,
+            tokenizer=tokenizer,
+            transformer_cls=MODEL_MAPPING[config.__class__],
+            pretrained=None,
+            lambda_kl=getattr(args, 'lambda_kl', 0.0),
+            lambda_neg=getattr(args, 'lambda_neg', 0.0),
+            lambda_flt=getattr(args, 'lambda_flt', 0.0),
+        )
+
     # Phrase only (for phrase embedding)
     if phrase_only:
         if hasattr(model, "module"):
@@ -130,35 +132,34 @@ def load_encoder(device, args, phrase_only=False, query_only=False):
         else:
             del model.query_start_encoder
             del model.query_end_encoder
+        if args.load_warmup_dir:
+            if hasattr(warmup_model, "module"):
+                del warmup_model.module.query_start_encoder
+                del warmup_model.module.query_end_encoder
+            else:
+                del warmup_model.query_start_encoder
+                del warmup_model.query_end_encoder
         logger.info("Load only phrase encoders for embedding phrases")
 
-
-    if args.ret_both_warm_pretrain:
-        if query_only:
-            if hasattr(model, "module"):
-                del model.module.phrase_encoder
+    # Query only (for query embedding)
+    if query_only:
+        if hasattr(model, "module"):
+            del model.module.phrase_encoder
+        else:
+            del model.phrase_encoder
+        if args.load_warmup_dir:
+            if hasattr(warmup_model, "module"):
                 del warmup_model.module.phrase_encoder
             else:
-                del model.phrase_encoder
                 del warmup_model.phrase_encoder
+        logger.info("Load only query encoders for embedding queries")
 
-        model.to(device)
-        logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
+    model.to(device)
+    logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
+
+    if args.load_warmup_dir:
         warmup_model.to(device)
         logger.info('Number of warmup model parameters: {:,}'.format(sum(p.numel() for p in warmup_model.parameters())))
         return model, warmup_model, tokenizer, config
-    
-    else:
-        if query_only:
-            if hasattr(model, "module"):
-                del model.module.phrase_encoder
-            else:
-                del model.phrase_encoder
-            logger.info("Load only query encoders for embedding queries")
 
-        model.to(device)
-        logger.info('Number of model parameters: {:,}'.format(sum(p.numel() for p in model.parameters())))
-        return model, tokenizer, config
-
-
-
+    return model, tokenizer, config

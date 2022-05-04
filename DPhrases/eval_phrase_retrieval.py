@@ -95,7 +95,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
 
-    warmup_query_encoder = None
+    warmup_query_encoder, joint_query_encoder = None, None
     if query_encoder is None:
         device = 'cuda' if args.cuda else 'cpu'
         if args.load_warmup_dir is not None:
@@ -218,7 +218,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
                 upd_queries = [(fh_ques + " " + pred_evid) for pred_evid in fh_evids]
             else:
                 upd_queries = [(fh_ques + " " + pred_phr) for pred_phr in fh_preds]
-            if type(query_encoder) == tuple:
+            if joint_query_encoder is not None:
                 upd_query_vec = embed_all_query(upd_queries, args, joint_query_encoder, tokenizer, silent=True)
             else:
                 upd_query_vec = embed_all_query(upd_queries, args, query_encoder, tokenizer, silent=True)
