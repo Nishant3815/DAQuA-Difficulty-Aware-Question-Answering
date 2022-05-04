@@ -135,7 +135,6 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
     if not args.ret_multi_stage_model:
         target_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
     elif args.ret_multi_stage_model:
-        args.ret_both_warm_pretrain = True
         target_encoder, warmup_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
 
     # MIPS
@@ -399,8 +398,8 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
                                                               to_arr(titles, 2), outs, args,
                                                               label_strat=args.warmup_label_strat)
-
-                target_encoder.train()
+                if not args.ret_multi_stage_model:
+                    target_encoder.train()
                 # Start vectors
                 svs_t = torch.Tensor(svs).to(device)  # shape: (bs, 2*topk, hid_dim)
                 # End vectors
@@ -424,7 +423,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                     # Retain the original query text for "easy" questions (i.e. store empty evidence)
                     if levels[i] == 'easy':
                         n_hop1_skipped_easy += 1
-                        upd_q_id = q_ids[i] + "_uc"
+                        upd_q_id = q_ids[i] + "_uc"  # unchanged
                         upd_level = levels[i]
                         upd_evidence = ''
                         upd_evidence_title = ''
@@ -434,32 +433,39 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                         )
                     else:
-                        # Track first-hop evidence for non-"easy" questions
-                        if len(tgts_t[i]) == 0 and len(p_tgts_t[i]) == 0:
-                            n_hop1_skipped_ans += 1
-                        for t in tgts_t[i][:args.top_k]:
-                            t = int(t.item())
-                            upd_q_id = q_ids[i] + f"_{t}"
+                        # Append question with gold SUP sentences (THIS LOGIC ONLY HERE; NOT IN query_ftune.py)
+                        if args.upd_sent_evd:
+                            upd_q_id = q_ids[i] + f"_g"  # gold
                             upd_level = levels[i]
-                            if not args.upd_sent_evd:
-                                upd_evidence = outs[i][t]['answer']
-                            elif args.upd_sent_evd:
-                                # Updating questions with gold SUP sentences
-                                for ans_sen in answers[i]:
-                                    upd_evidence = upd_evidence + ' ' + ans_sen
-                            upd_evidence_title = outs[i][t]['title'][0]
+                            upd_evidence = ' '.join(answers[i])
+                            upd_evidence_title = ' '.join(titles[i])
                             upd_answer = final_answers[i]
                             upd_answer_title = final_titles[i]
                             upd_queries.append(
                                 (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer, upd_answer_title)
                             )
+                        # Track first-hop evidence for non-"easy" questions
+                        else:
+                            if len(tgts_t[i]) == 0 and len(p_tgts_t[i]) == 0:
+                                n_hop1_skipped_ans += 1
+                            for t in tgts_t[i][:args.top_k]:
+                                t = int(t.item())
+                                upd_q_id = q_ids[i] + f"_{t}"
+                                upd_level = levels[i]
+                                upd_evidence = outs[i][t]['answer']
+                                upd_evidence_title = outs[i][t]['title'][0]
+                                upd_answer = final_answers[i]
+                                upd_answer_title = final_titles[i]
+                                upd_queries.append(
+                                    (upd_q_id, upd_level, q, upd_evidence, upd_evidence_title, upd_answer,
+                                     upd_answer_title)
+                                )
                 n_hop1_skipped_ans /= len(questions)
                 n_hop1_skipped_easy /= len(questions)
 
                 # Compute first-hop loss
                 assert len(train_dataloader) == 1
                 if not args.ret_multi_stage_model:
-
                     for batch in train_dataloader:
                         batch = tuple(t.to(device) for t in batch)
                         fhop_loss, accs = target_encoder.train_query(
@@ -477,32 +483,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         else:
                             total_accs += [0.0] * len(tgts_t)
                             total_accs_k += [0.0] * len(tgts_t)
-                
-                elif args.ret_multi_stage_model:
+                else:
                     fhop_loss = None
                     total_accs += [0.0] * len(tgts_t)
                     total_accs_k += [0.0] * len(tgts_t)
-                    # We don't want to update our pretrained model
-                    # with torch.no_grad():
-                    #
-                    #     for batch in train_dataloader:
-                    #         batch = tuple(t.to(device) for t in batch)
-                    #         fhop_loss, accs = target_encoder.train_query(
-                    #             input_ids_=batch[0], attention_mask_=batch[1], token_type_ids_=batch[2],
-                    #             start_vecs=svs_t,
-                    #             end_vecs=evs_t,
-                    #             targets=tgts_t,
-                    #             p_targets=p_tgts_t,
-                    #         )
-                    #         if fhop_loss is not None:
-                    #             if args.gradient_accumulation_steps > 1:
-                    #                 fhop_loss = fhop_loss / args.gradient_accumulation_steps
-                    #             total_accs += accs
-                    #             total_accs_k += [len(tgt) > 0 for tgt in tgts_t]
-                    #         else:
-                    #             total_accs += [0.0] * len(tgts_t)
-                    #             total_accs_k += [0.0] * len(tgts_t)
-
 
                 # Joint training: 2nd stage
                 total_u_accs_step = []
@@ -517,6 +501,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                         target_encoder, tokenizer, args.per_gpu_train_batch_size, args, upd_answers,
                         upd_answer_titles, agg_strat=args.agg_strat, always_return_sent=True, silent=True
                     )
+
+                    if args.ret_multi_stage_model:
+                        target_encoder.train()
+
                     u_loss_arr = []
                     for upd_step_idx, (
                             upd_q_ids, upd_levels, upd_questions, upd_evidences, upd_evidence_titles, upd_outs, upd_answers,
@@ -716,7 +704,7 @@ def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encod
             q_texts=questions[q_idx:q_idx + step], nprobe=args.nprobe,
             top_k=args.top_k, return_idxs=True,
             max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=agg_strat,
-            return_sent=return_sent
+            return_sent=return_sent, search_k=args.search_k
         )
 
         yield (
