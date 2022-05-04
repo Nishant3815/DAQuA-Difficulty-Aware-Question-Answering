@@ -191,7 +191,8 @@ def load_qa_pairs(data_path, args, q_idx=None, draft_num_examples=100, shuffle=F
 def shuffle_data(data, args):
     q_ids, levels, questions, answers, titles, final_answers, final_titles = data
     qa_pairs = list(zip(q_ids, levels, questions, answers, titles, final_answers, final_titles))
-    random.shuffle(qa_pairs)
+    if not args.no_shuffle:
+        random.shuffle(qa_pairs)
     # Subset data for tuning (if required)
     if not args.data_sub:
         qa_pairs_set = qa_pairs
