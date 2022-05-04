@@ -429,7 +429,7 @@ class MIPS(object):
         logger.debug(f'4) {time()-start_time:.3f}s: get metadata')
         return new_out
 
-    def aggregate_results(self, results, top_k=10, q_text=None, agg_strat='opt1'):
+    def aggregate_results(self, results, top_k=None, q_text=None, agg_strat='opt1'):
         out = []
         doc_ans = {}
         for r_idx, result in enumerate(results):
@@ -455,35 +455,40 @@ class MIPS(object):
                         results[doc_ans[da]]['title'] += result['title']
         results = sorted(results, key=lambda each_out: -each_out['score'])
         results = list(filter(lambda x: x['score'] > -1e5, results)) # not exactly top-k but will be cut during evaluation
-        return results
+        return results if top_k is None else results[:top_k]
 
     def search(self, query, q_texts=None, nprobe=256, top_k=10, aggregate=False, return_idxs=False,
-               max_answer_length=10, agg_strat='opt1', return_sent=False, prune_low_preds=True):
-
+               max_answer_length=10, agg_strat='opt1', return_sent=False, prune_low_preds=True,
+               search_k=None):
+        lookup_k = search_k if search_k is not None else top_k
         # MIPS on start/end
         start_time = time()
         start_doc_idxs, start_idxs, start_I, end_doc_idxs, end_idxs, end_I, start_scores, end_scores = self.search_dense(
             query,
             q_texts=q_texts,
             nprobe=nprobe,
-            top_k=top_k,
+            top_k=lookup_k,
         )
-        logger.debug(f'Top-{top_k} MIPS: {time()-start_time:.3f}s')
+        logger.debug(f'Top-{lookup_k} MIPS: {time()-start_time:.3f}s')
 
         # Search phrase
         start_time = time()
         outs = self.search_phrase(
             query, start_doc_idxs, start_idxs, start_I, end_doc_idxs, end_idxs, end_I, start_scores, end_scores,
-            top_k=top_k, max_answer_length=max_answer_length, return_idxs=return_idxs, return_sent=return_sent,
+            top_k=lookup_k, max_answer_length=max_answer_length, return_idxs=return_idxs, return_sent=return_sent,
             prune_low_preds=prune_low_preds
         )
-        logger.debug(f'Top-{top_k} phrase search: {time()-start_time:.3f}s')
+        logger.debug(f'Top-{lookup_k} phrase search: {time()-start_time:.3f}s')
 
         # Aggregate
         if aggregate:
             outs = [
                 self.aggregate_results(results, top_k, q_text, agg_strat) for results, q_text in zip(outs, q_texts)
             ]
+            logger.debug(f'Top-{top_k} aggregation (de-duplication)')
+        else:
+            outs = [o[:top_k] for o in outs]
+
         if start_doc_idxs.shape[1] != top_k:
             logger.info(f"Warning.. {start_doc_idxs.shape[1]} only retrieved")
             top_k = start_doc_idxs.shape[1]
