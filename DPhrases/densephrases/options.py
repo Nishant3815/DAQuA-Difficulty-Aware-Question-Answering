@@ -232,7 +232,10 @@ class Options():
                                  help="Drop questions that have yes/no as the gold answer")
         self.parser.add_argument("--no_eval_norm", action='store_true', default=False,
                                  help="Prevent answer normalization for predictions during evaluation")
-
+        self.parser.add_argument("--skip_first_hop", dest='skip_first_hop', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False,  help="Skip first hop in training and update with empty evidences for all questions.")
+        self.parser.add_argument("--seg_preds", dest='seg_preds', type=lambda x: bool(strtobool(x)), nargs='?',
+                        const=True, default=False,  help="Separate out the correct and incorrect predictions in the final .pred file for easier error analysis.")
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
