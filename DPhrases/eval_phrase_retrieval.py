@@ -94,18 +94,27 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
     else:
         qids, questions, gold_answers, gold_titles = load_qa_pairs(data_path, args, q_idx)
-    
-    if type(query_encoder)==tuple:
-        # Leveraged we want to encode using warmup_model at first hop and pretrained model at second hop
-        logger.info(f'Pretrained query encoder loaded from {args.load_dir} and warmup query encoder loaded from {args.load_warmup_dir}')
-        joint_query_encoder, warmup_query_encoder = query_encoder
-        query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
 
-    else:
-        if query_encoder is None:
+    warmup_query_encoder = None
+    if query_encoder is None:
+        device = 'cuda' if args.cuda else 'cpu'
+        if args.load_warmup_dir is not None:
+            logger.info(f'Warmup query encoder will be loaded from {args.load_warmup_dir}')
+            logger.info(f'Joint query encoder will be loaded from {args.load_dir}')
+            joint_query_encoder, warmup_query_encoder, tokenizer, _ = load_encoder(device, args,
+                                                                                   query_only=True)
+        else:
             logger.info(f'Query encoder will be loaded from {args.load_dir}')
-            device = 'cuda' if args.cuda else 'cpu'
             query_encoder, tokenizer, _ = load_encoder(device, args, query_only=True)
+    else:
+        if type(query_encoder) == tuple:
+            # We want to encode using warmup_model at first hop and joint model at second hop
+            logger.info(
+                f'Using separate models for first-hop and second-hop')
+            joint_query_encoder, warmup_query_encoder = query_encoder
+    if warmup_query_encoder is not None:
+        query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
+    else:
         query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
 
     # Load MIPS
@@ -119,7 +128,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             gold_answers = gold_evids
             gold_titles = gold_evid_titles
         # Set aggregation strategy
-        agg_strat = agg_strat if agg_strat is not None else 'opt2a' if firsthop else args.agg_strat
+        agg_strat = agg_strat if agg_strat is not None else args.warmup_agg_strat if firsthop else args.agg_strat
         # If "opt2a", reduce the predicted context to the sentence in which the predicted phrase is found
         return_sent = always_return_sent or agg_strat == "opt2a"
         logger.info(f'Aggregation strategy used: {agg_strat}')
@@ -794,9 +803,6 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    
-    if args.ret_both_warm_pretrain:
-        raise NotImplementedError
 
     if args.run_mode == 'eval':
         evaluate(args)
