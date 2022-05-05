@@ -431,11 +431,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
             }
             pred_out[qids[i]].update(joint_pred_out)
 
-        if args.seg_preds:
-            # separating correct and incorrect predictions
-            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out))
-            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out))
-
     # Aggregate prediction metrics
     total = len(predictions)
     exact_match_top1 = 100.0 * exact_match_top1 / total
@@ -507,16 +502,27 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         )
         agg_pred_path = pred_path.replace('.pred', '_agg.pred')
         
-        logger.info(f'Saving individual predictions to {pred_path}')
         if args.seg_preds:
-            pred_path_correct = 'correct' + pred_path
-            pred_path_wrong = 'wrong' + pred_path
-            
-            with open(pred_path_correct, 'w') as f:
-                json.dump(pred_out_correct, f, indent=2)
-            with open(pred_path_wrong, 'w') as f:
-                json.dump(pred_out_wrong, f, indent=2)
+            # separating correct and incorrect predictions
+            pred_out_hit1 = {k: v for k, v in pred_out.items() if v[f'{phr_metric}_top1']}
+            pred_out_hitk = {k: v for k, v in pred_out.items() if
+                              not v[f'{phr_metric}_top1'] and v[f'{phr_metric}_top{args.top_k}']}
+            pred_out_hit0 = {k: v for k, v in pred_out.items() if not v[f'{phr_metric}_top{args.top_k}']}
+
+            pred_path_hit1 = pred_path.replace('.pred', '_hit1.pred')
+            logger.info(f'Saving hit@1 predictions to {pred_path_hit1}')
+            with open(pred_path_hit1, 'w') as f:
+                json.dump(pred_out_hit1, f, indent=2)
+            pred_path_hitk = pred_path.replace('.pred', f'_hit{args.top_k}.pred')
+            logger.info(f'Saving hit@k (but not @1) predictions to {pred_path_hitk}')
+            with open(pred_path_hitk, 'w') as f:
+                json.dump(pred_out_hitk, f, indent=2)
+            pred_path_hit0 = pred_path.replace('.pred', f'_hit0.pred')
+            logger.info(f'Saving hit@0 (no hits) predictions to {pred_path_hit0}')
+            with open(pred_path_hit0, 'w') as f:
+                json.dump(pred_out_hit0, f, indent=2)
         else:
+            logger.info(f'Saving individual predictions to {pred_path}')
             with open(pred_path, 'w') as f:
                 json.dump(pred_out, f, indent=2)
 
@@ -624,27 +630,13 @@ def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, p
                 'em_top1': bool(local_accuracy),
         }
 
-    if args.seg_preds:
-            # separating correct and incorrect predictions
-            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out))
-            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out))
-
     # dump custom predictions
     pred_path = os.path.join(
         pred_dir, os.path.splitext(os.path.basename(args.test_path))[0] + f'_{total}.pred'
     )
     logger.info(f'Saving custom prediction file to {pred_path}')
-    if args.seg_preds:
-            pred_path_correct = 'correct' + pred_path
-            pred_path_wrong = 'wrong' + pred_path
-            
-            with open(pred_path_correct, 'w') as f:
-                json.dump(pred_out_correct, f, indent=2)
-            with open(pred_path_wrong, 'w') as f:
-                json.dump(pred_out_wrong, f, indent=2)
-    else:
-        with open(pred_path, 'w') as f:
-            json.dump(pred_out, f, indent=2)
+    with open(pred_path, 'w') as f:
+        json.dump(pred_out, f, indent=2)
 
     return result['retrieval']['Rprec'], result['retrieval']['recall@5'], result['kilt']['KILT-accuracy'], result['kilt']['KILT-f1']
 
