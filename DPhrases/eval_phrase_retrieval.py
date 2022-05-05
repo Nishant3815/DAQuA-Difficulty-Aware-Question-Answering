@@ -261,13 +261,14 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
     return eval_fn(predictions, qids, questions, to_arr(gold_answers, d=2), to_arr(gold_titles, d=2), args, pred_evids,
                    scores, to_arr(pred_titles, d=3), multihop=True, save_pred=save_pred,
-                   pred_fname_suffix=pred_fname_suffix, data_path=data_path, save_path=save_path, chains=pred_chains)
+                   pred_fname_suffix=pred_fname_suffix, data_path=data_path, save_path=save_path,
+                   pred_chains=pred_chains, evidences=to_arr(gold_evids, d=2))
 
 
 def evaluate_results(predictions, qids, questions, answers, titles, args, pred_evids,
                      scores, pred_titles, firsthop=False, multihop=False,
                      save_pred=None, pred_fname_suffix="", data_path=None, save_path=None,
-                     chains=None):
+                     pred_chains=None, evidences=None):
     """
     TODO: Implement evaluation of `titles` (i.e. correct document retrieval)
     """
@@ -407,18 +408,21 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
             'question': questions[i],
             'answer': answers[i],
             'title': titles[i][0],
+            'evidence': evidences[i] if evidences is not None else None,
             # final preds
             'pred_phrase': predictions[i],
             'pred_title': [pt[0] for pt in pred_titles[i]],
             'pred_evidence': pred_evids[i] if pred_evids is not None else '',
             'score': scores[i],
         }
+        if evidences is None:
+            del pred_out[qids[i]]['evidence']  # Since there is no gold evidence for the first-hop answer
         if multihop:
             fhop_pred_out = {
                 # first-hop preds
-                'pred_fhop_phrase': [tup[0] for tup in chains[i][0]],
-                'pred_fhop_title': [tup[0] for tup in chains[i][1]],
-                'pred_fhop_evidence': [tup[0] for tup in chains[i][2]],
+                'pred_fhop_phrase': [tup[0] for tup in pred_chains[i][0]],
+                'pred_fhop_title': [tup[0] for tup in pred_chains[i][1]],
+                'pred_fhop_evidence': [tup[0] for tup in pred_chains[i][2]],
             }
             pred_out[qids[i]].update(fhop_pred_out)
         metrics_pred_out = {
