@@ -461,6 +461,7 @@ class MIPS(object):
                max_answer_length=10, agg_strat='opt1', return_sent=False, prune_low_preds=True,
                search_k=None):
         lookup_k = search_k if search_k is not None else top_k
+        assert lookup_k >= top_k
         # MIPS on start/end
         start_time = time()
         start_doc_idxs, start_idxs, start_I, end_doc_idxs, end_idxs, end_I, start_scores, end_scores = self.search_dense(
@@ -480,17 +481,17 @@ class MIPS(object):
         )
         logger.debug(f'Top-{lookup_k} phrase search: {time()-start_time:.3f}s')
 
-        # Aggregate
+        # Aggregate and limit results to 2*top_k (2x since start/end vectors can produce 2 different set of results)
         if aggregate:
             outs = [
-                self.aggregate_results(results, top_k, q_text, agg_strat) for results, q_text in zip(outs, q_texts)
+                self.aggregate_results(results, 2*top_k, q_text, agg_strat) for results, q_text in zip(outs, q_texts)
             ]
-            logger.debug(f'Top-{top_k} aggregation (de-duplication)')
+            logger.debug(f'Top-(2*{top_k}) aggregation (de-duplication)')
         else:
-            outs = [o[:top_k] for o in outs]
+            outs = [o[:2*top_k] for o in outs]
 
-        if start_doc_idxs.shape[1] != top_k:
-            logger.info(f"Warning.. {start_doc_idxs.shape[1]} only retrieved")
-            top_k = start_doc_idxs.shape[1]
+        # if start_doc_idxs.shape[1] != top_k:
+        #     logger.info(f"Warning.. {start_doc_idxs.shape[1]} only retrieved")
+        #     top_k = start_doc_idxs.shape[1]
 
         return outs

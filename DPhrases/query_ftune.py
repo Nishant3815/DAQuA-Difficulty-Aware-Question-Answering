@@ -184,7 +184,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
-                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
+                svs, evs, tgts, p_tgts, _ = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
                                                               to_arr(titles, 2), outs, args,
                                                               label_strat=args.warmup_label_strat)
 
@@ -395,7 +395,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                 train_dataloader, _, _ = get_question_dataloader(
                     questions, tokenizer, args.max_query_length, batch_size=args.per_gpu_train_batch_size
                 )
-                svs, evs, tgts, p_tgts = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
+                svs, evs, tgts, p_tgts, swapped_idxs = annotate_phrase_vecs(mips, q_ids, questions, to_arr(answers, 2),
                                                               to_arr(titles, 2), outs, args,
                                                               label_strat=args.warmup_label_strat)
 
@@ -445,6 +445,7 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             n_hop1_skipped_ans += 1
                         for t in tgts_t[i][:args.top_k]:
                             t = int(t.item())
+                            t = swapped_idxs[i].get(t, t)  # Return self if not swapped
                             upd_q_id = q_ids[i] + f"_{t}"
                             upd_level = levels[i]
                             upd_evidence = outs[i][t]['context' if args.upd_sent_evd else 'answer']
@@ -509,11 +510,10 @@ def train_query_encoder(args, save_path, mips=None, init_dev_acc=None):
                             upd_questions, tokenizer, args.max_query_length,
                             batch_size=args.per_gpu_train_batch_size
                         )
-                        u_svs, u_evs, u_tgts, u_p_tgts = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
+                        u_svs, u_evs, u_tgts, u_p_tgts, _ = annotate_phrase_vecs(mips, upd_q_ids, upd_questions,
                                                                               to_arr(upd_answers, 2),
                                                                               to_arr(upd_answer_titles, 2),
-                                                                              upd_outs, args,
-                                                                              label_strat=args.label_strat)
+                                                                              upd_outs, args)
                         # Start vectors
                         u_svs_t = torch.Tensor(u_svs).to(device)  # shape: (bs, 2*topk, hid_dim)
                         # End vectors
@@ -695,12 +695,15 @@ def get_top_phrases(mips, q_ids, levels, questions, answers, titles, query_encod
         # For multi-hop warmup training
         return_sent = always_return_sent or agg_strat == "opt2a"
 
+        top_k = args.lbl_search_k if args.lbl_search_k is not None else args.top_k
+        assert top_k >= args.top_k
+
         outs = search_fn(
             query_vec,
             q_texts=questions[q_idx:q_idx + step], nprobe=args.nprobe,
-            top_k=args.top_k, return_idxs=True,
+            top_k=top_k, return_idxs=True,
             max_answer_length=args.max_answer_length, aggregate=args.aggregate, agg_strat=agg_strat,
-            return_sent=return_sent, search_k=args.search_k
+            return_sent=return_sent, search_k=args.agg_search_k
         )
 
         yield (
@@ -726,11 +729,13 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         'title': ['']
     }
 
+    top_k = args.lbl_search_k if args.lbl_search_k is not None else args.top_k
+
     # Pad phrase groups (two separate top-k coming from start/end, so pad with top_k*2)
     for b_idx in range(len(phrase_groups)):
-        while len(phrase_groups[b_idx]) < args.top_k * 2:
+        while len(phrase_groups[b_idx]) < top_k * 2:
             phrase_groups[b_idx].append(dummy_group)
-        assert len(phrase_groups[b_idx]) == args.top_k * 2
+        assert len(phrase_groups[b_idx]) == top_k * 2
 
     # Flatten phrase groups
     flat_phrase_groups = [phrase for phrase_group in phrase_groups for phrase in phrase_group]
@@ -746,8 +751,8 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
     end_vecs = end_vecs * zero_mask
 
     # Reshape
-    start_vecs = np.reshape(start_vecs, (batch_size, args.top_k * 2, -1))
-    end_vecs = np.reshape(end_vecs, (batch_size, args.top_k * 2, -1))
+    start_vecs = np.reshape(start_vecs, (batch_size, top_k * 2, -1))
+    end_vecs = np.reshape(end_vecs, (batch_size, top_k * 2, -1))
 
     # Dummy targets
     targets = [[None for phrase in phrase_group] for phrase_group in phrase_groups]
@@ -815,7 +820,50 @@ def annotate_phrase_vecs(mips, q_ids, questions, answers, titles, phrase_groups,
         ]
         p_targets = [[ii if val else None for ii, val in enumerate(target)] for target in p_targets]
 
-    return start_vecs, end_vecs, targets, p_targets
+    if top_k > args.top_k:
+        # Fetch 1 target from beyond 2*args.top_k if otherwise empty
+        # Return at most 2*args.top_k total values
+        swapped_idxs = []
+        retain_k = 2 * args.top_k
+        for i in range(len(targets)):
+            swapped_idx = {}
+            non_empty_tgts = [t for t in targets[i] if t is not None]
+            non_empty_p_tgts = [pt for pt in p_targets[i] if pt is not None]
+            is_tgts_empty = len(non_empty_tgts) == 0
+            is_p_tgts_empty = len(non_empty_p_tgts) == 0
+            if is_tgts_empty and is_p_tgts_empty:
+                swapped_idxs.append(swapped_idx)
+                continue
+            if not is_tgts_empty:
+                if non_empty_tgts[0] < retain_k:
+                    swapped_idxs.append(swapped_idx)
+                    continue
+            if not is_p_tgts_empty:
+                if non_empty_p_tgts[0] < retain_k:
+                    swapped_idxs.append(swapped_idx)
+                    continue
+            if not is_tgts_empty:
+                swapped_idx = {retain_k - 1: non_empty_tgts[0]}
+                swapped_idxs.append(swapped_idx)
+                targets[i][retain_k - 1] = retain_k - 1
+                start_vecs[i][retain_k - 1] = start_vecs[i][non_empty_tgts[0]]
+                end_vecs[i][retain_k - 1] = end_vecs[i][non_empty_tgts[0]]
+                continue
+            if not is_p_tgts_empty:
+                swapped_idx = {retain_k - 1: non_empty_p_tgts[0]}
+                swapped_idxs.append(swapped_idx)
+                p_targets[i][retain_k - 1] = retain_k - 1
+                start_vecs[i][retain_k - 1] = start_vecs[i][non_empty_p_tgts[0]]
+                end_vecs[i][retain_k - 1] = end_vecs[i][non_empty_p_tgts[0]]
+                continue
+        start_vecs = start_vecs[:, :retain_k, :]
+        end_vecs = end_vecs[:, :retain_k, :]
+        targets = [t[:retain_k] for t in targets]
+        p_targets = [pt[:retain_k] for pt in p_targets]
+    else:
+        swapped_idxs = [{}]*len(targets)
+
+    return start_vecs, end_vecs, targets, p_targets, swapped_idxs
 
 
 if __name__ == '__main__':
