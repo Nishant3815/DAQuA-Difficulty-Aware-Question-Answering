@@ -433,8 +433,8 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
 
         if args.seg_preds:
             # separating correct and incorrect predictions
-            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out))
-            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out))
+            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out.values()))
+            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out.values()))
 
     # Aggregate prediction metrics
     total = len(predictions)
@@ -626,8 +626,8 @@ def evaluate_results_kilt(predictions, qids, questions, answers, titles, args, p
 
     if args.seg_preds:
             # separating correct and incorrect predictions
-            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out))
-            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out))
+            pred_out_correct = list(filter(lambda d: d[f'{phr_metric}_top1'] == True, pred_out.values()))
+            pred_out_wrong = list(filter(lambda d: d[f'{phr_metric}_top1'] == False, pred_out.values()))
 
     # dump custom predictions
     pred_path = os.path.join(
