@@ -199,7 +199,6 @@ class Options():
         self.parser.add_argument('--label_strat', default='phrase', type=str,
                                  help="label strat={phrase|doc|phrase,doc}")
         self.parser.add_argument("--wandb", dest='wandb', type=lambda x: bool(strtobool(x)), help="Enable Wandb logging.")
-        self.parser.add_argument("--ret_multi_stage_model", action="store_true", default=False, help='related to returning both warmup and pretrained moodels from load_dir and load_warmup_dir')
         ############# Multi-hop ##############
         self.parser.add_argument("--num_firsthop_epochs", type=int, default=1,
                                  help="Number of warmup epochs to train model for first hop retrieval")
@@ -234,14 +233,21 @@ class Options():
                                  help="Drop questions that have yes/no as the gold answer")
         self.parser.add_argument("--no_eval_norm", action='store_true', default=False,
                                  help="Prevent answer normalization for predictions during evaluation")
-        self.parser.add_argument("--skip_first_hop", dest='skip_first_hop', type=lambda x: bool(strtobool(x)), nargs='?',
-                        const=True, default=False,  help="Skip first hop in training and update with empty evidences for all questions.")
+        self.parser.add_argument("--skip_first_hop", dest='skip_first_hop', type=lambda x: bool(strtobool(x)),
+                                 nargs='?',
+                                 const=True, default=False,
+                                 help="Skip first-hop in training and update with empty evidences for all questions")
         self.parser.add_argument("--seg_preds", dest='seg_preds', type=lambda x: bool(strtobool(x)), nargs='?',
-                        const=True, default=False,  help="Separate out the correct and incorrect predictions in the final .pred file for easier error analysis.")
+                                 const=True, default=False,
+                                 help="Separate out the correct and incorrect predictions in the final .pred file")
         self.parser.add_argument("--no_shuffle", action='store_true', default=False,
                                  help="Prevent loaded qa pairs from being shuffled")
-        self.parser.add_argument('--search_k', type=int, default=None,
+        self.parser.add_argument("--ret_multi_stage_model", action="store_true", default=False,
+                                 help='Enable multi-model training using models from load_dir and load_warmup_dir')
+        self.parser.add_argument('--agg_search_k', type=int, default=None,
                                  help="Number of candidates to search for before the aggregation strategy is applied")
+        self.parser.add_argument('--lbl_search_k', type=int, default=None,
+                                 help="Number of candidates to search for for tgts & p_tgts annotation during training")
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
