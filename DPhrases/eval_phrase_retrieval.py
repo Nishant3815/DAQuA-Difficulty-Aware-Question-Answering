@@ -270,7 +270,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
                      chains=None):
     """
     TODO: Implement evaluation of `titles` (i.e. correct document retrieval)
-    TODO: Implement evaluation of `chains`
     """
     # Set path to load evaluation data
     data_path = data_path if data_path is not None else args.test_path
@@ -404,32 +403,48 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         # Score statistics
         assert len(predictions[i]) <= args.top_k
         pred_out[qids[i]] = {
+            # ground-truth
             'question': questions[i],
-            'answer': answers[i], 'title': titles[i][0],
-            'pred_phrase': predictions[i], 'pred_title': [pt[0] for pt in pred_titles[i]],
+            'answer': answers[i],
+            'title': titles[i][0],
+            # final preds
+            'pred_phrase': predictions[i],
+            'pred_title': [pt[0] for pt in pred_titles[i]],
             'pred_evidence': pred_evids[i] if pred_evids is not None else '',
             'score': scores[i],
-            f'{phr_metric}_top1': bool(em_top1), f'{phr_metric}_top{args.top_k}': bool(em_topk),
+        }
+        if multihop:
+            fhop_pred_out = {
+                # first-hop preds
+                'pred_fhop_phrase': [tup[0] for tup in chains[i][0]],
+                'pred_fhop_title': [tup[0] for tup in chains[i][1]],
+                'pred_fhop_evidence': [tup[0] for tup in chains[i][2]],
+            }
+            pred_out[qids[i]].update(fhop_pred_out)
+        metrics_pred_out = {
+            # instance-level metrics
+            f'{phr_metric}_top1': bool(em_top1),
+            f'{phr_metric}_top{args.top_k}': bool(em_topk),
             'f1_top1': f1_top1, f'f1_top{args.top_k}': f1_topk,
             # 'se_pos': se_positions[i] if se_positions is not None else (-1, -1),
-            'rd_topk': rd_topk,
+            # 'rd_topk': rd_topk,
         }
+        pred_out[qids[i]].update(metrics_pred_out)
         if firsthop:
             # Add evidence metrics
-            evid_pred_out = {
+            evid_metrics_pred_out = {
                 'evid_em_top1': bool(evid_em_top1),
                 f'evid_em_top{args.top_k}': bool(evid_em_topk),
                 'evid_f1_top1': evid_f1_top1,
                 f'evid_f1_top{args.top_k}': evid_f1_topk
             }
-            pred_out[qids[i]].update(evid_pred_out)
-
+            pred_out[qids[i]].update(evid_metrics_pred_out)
             # Add joint metrics
-            joint_pred_out = {
+            joint_metrics_pred_out = {
                 'phr_substr_evid_f1_top1': phr_substr_evid_f1_top1,
                 f'phr_substr_evid_f1_top{args.top_k}': phr_substr_evid_f1_topk
             }
-            pred_out[qids[i]].update(joint_pred_out)
+            pred_out[qids[i]].update(joint_metrics_pred_out)
 
     # Aggregate prediction metrics
     total = len(predictions)
@@ -529,8 +544,6 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
         logger.info(f'Saving aggregate predictions to {agg_pred_path}')
         with open(agg_pred_path, 'w') as f:
             json.dump(agg_pred_out, f, indent=2)
-
-    # wandb.log(agg_pred_out)
 
     # Evaluate passage retrieval
     if args.eval_psg:
