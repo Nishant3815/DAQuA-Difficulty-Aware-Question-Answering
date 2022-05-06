@@ -84,7 +84,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
 
         # Skip "yes/no" questions during evaluation
-        if multihop and args.filter_yn:
+        if args.filter_yn and (multihop or args.eval_fhop_gold_sent):
             logger.info("Filtering yes/no questions")
             qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
                       (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
