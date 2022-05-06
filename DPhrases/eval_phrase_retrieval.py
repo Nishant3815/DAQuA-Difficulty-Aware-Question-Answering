@@ -324,6 +324,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
 
     # Set the phrase metric text for logging
     phr_metric = "em"
+    firsthop = firsthop and not args.eval_fhop_gold_sent
     if firsthop:
         phr_metric = "substr"
 
