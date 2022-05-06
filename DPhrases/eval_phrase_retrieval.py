@@ -115,7 +115,11 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if warmup_query_encoder is not None:
         query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
     else:
-        query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
+        if args.eval_fhop_gold_sent:
+            questions_w_gold = [' '.join(q_ge) for q_ge in list(zip(questions, [' '.join(ge) for ge in gold_evids]))]
+            query_vec = embed_all_query(questions_w_gold, args, query_encoder, tokenizer)
+        else:
+            query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
 
     # Load MIPS
     if mips is None:
@@ -124,7 +128,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
     # Evaluation for first-hop or no-hop scenario
     if not multihop:
-        if firsthop:
+        if firsthop and not args.eval_fhop_gold_sent:
             gold_answers = gold_evids
             gold_titles = gold_evid_titles
         # Set aggregation strategy

@@ -248,6 +248,8 @@ class Options():
                                  help="Number of candidates to search for before the aggregation strategy is applied")
         self.parser.add_argument('--lbl_search_k', type=int, default=None,
                                  help="Number of candidates to search for for tgts & p_tgts annotation during training")
+        self.parser.add_argument("--eval_fhop_gold_sent", action="store_true", default=False,
+                                 help='Use gold sentences as the first-hop for final answer eval')
 
     def add_demo_options(self):
         self.parser.add_argument('--base_ip', default='http://127.0.0.1')
