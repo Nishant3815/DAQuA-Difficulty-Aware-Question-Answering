@@ -84,7 +84,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
             qids, levels, questions, gold_evids, gold_evid_titles, gold_answers, gold_titles = zip(*qpairs)
 
         # Skip "yes/no" questions during evaluation
-        if multihop and args.filter_yn:
+        if args.filter_yn and (multihop or args.eval_fhop_gold_sent):
             logger.info("Filtering yes/no questions")
             qpairs = [(qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) for
                       (qid, lev, ques, gold_ev, gold_evt, gold_ans, gold_tit) in
@@ -115,7 +115,11 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
     if warmup_query_encoder is not None:
         query_vec = embed_all_query(questions, args, warmup_query_encoder, tokenizer)
     else:
-        query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
+        if args.eval_fhop_gold_sent:
+            questions_w_gold = [' '.join(q_ge) for q_ge in list(zip(questions, [' '.join(ge) for ge in gold_evids]))]
+            query_vec = embed_all_query(questions_w_gold, args, query_encoder, tokenizer)
+        else:
+            query_vec = embed_all_query(questions, args, query_encoder, tokenizer)
 
     # Load MIPS
     if mips is None:
@@ -124,7 +128,7 @@ def evaluate(args, mips=None, query_encoder=None, tokenizer=None, q_idx=None, fi
 
     # Evaluation for first-hop or no-hop scenario
     if not multihop:
-        if firsthop:
+        if firsthop and not args.eval_fhop_gold_sent:
             gold_answers = gold_evids
             gold_titles = gold_evid_titles
         # Set aggregation strategy
@@ -320,6 +324,7 @@ def evaluate_results(predictions, qids, questions, answers, titles, args, pred_e
 
     # Set the phrase metric text for logging
     phr_metric = "em"
+    firsthop = firsthop and not args.eval_fhop_gold_sent
     if firsthop:
         phr_metric = "substr"
 
